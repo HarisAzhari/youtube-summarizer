@@ -55,12 +55,12 @@ automation_status = {
 }
 
 def get_next_run_time():
-    """Get next 6 AM MYT run time"""
+    """Get next 2:03 PM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    next_run = now.replace(hour=14, minute=4, second=0, microsecond=0)
     
-    # If it's already past 6 AM, schedule for next day
+    # If it's already past 2:03 PM, schedule for next day
     if now >= next_run:
         next_run = next_run + timedelta(days=1)
     
