@@ -142,36 +142,47 @@ def get_caption_tracks(video_id, api_key):
         return []
 
 def get_transcript_v2(video_id, api_key):
-    """Simplified transcript retrieval"""
-    import requests  # Explicitly import here to ensure it's available
+    """Transcript retrieval with OAuth2 support for captions"""
+    import requests
     
     print(f"\nAttempting to get transcript for {video_id}")
     
     try:
-        # First try direct API access to get captions
-        url = f"https://youtube.googleapis.com/youtube/v3/captions?part=snippet&videoId={video_id}&key={api_key}"
+        # Try using the transcripts API first with v3 data API
+        url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={video_id}&key={api_key}"
         response = requests.get(url)
+        data = response.json()
         
-        if response.status_code == 200:
-            captions_data = response.json()
-            if 'items' in captions_data:
-                for caption in captions_data['items']:
-                    language = caption['snippet']['language']
-                    if language in ['en', 'id']:
-                        try:
-                            url = f"https://youtube.googleapis.com/youtube/v3/captions/{caption['id']}?key={api_key}"
-                            response = requests.get(url)
-                            if response.status_code == 200:
-                                return response.text
-                        except:
-                            continue
+        if 'items' in data and len(data['items']) > 0:
+            # Check if captions are enabled
+            has_captions = data['items'][0]['snippet'].get('hasCaption', False)
+            if has_captions:
+                # Try a direct request to the timedtext API
+                # This is a less documented but more reliable method
+                formats = [
+                    'srv1',  # ASR captions
+                    'srv3',  # Standard captions
+                    'ttml'   # Another format to try
+                ]
+                
+                # Try different caption formats
+                for fmt in formats:
+                    try:
+                        timed_text_url = f"https://www.youtube.com/api/timedtext?v={video_id}&lang=en&fmt={fmt}"
+                        response = requests.get(timed_text_url)
+                        
+                        if response.status_code == 200 and response.text:
+                            print(f"Successfully retrieved captions using format: {fmt}")
+                            return response.text
+                    except:
+                        continue
 
-        # If API method fails, try youtube_transcript_api
+        # If direct methods fail, try youtube_transcript_api as fallback
         from youtube_transcript_api import YouTubeTranscriptApi
         
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
-        # Try to get English or Indonesian transcript
+        # Try English or Indonesian
         for lang in ['en', 'id']:
             try:
                 transcript = transcript_list.find_transcript([lang])
@@ -179,16 +190,13 @@ def get_transcript_v2(video_id, api_key):
                 return " ".join(entry['text'] for entry in transcript_data)
             except:
                 continue
-
-        # If no English/Indonesian available, try any transcript and translate
-        try:
-            transcript = transcript_list.find_manually_created_transcript()
-            if transcript.language_code not in ['en', 'id']:
-                transcript = transcript.translate('en')
-            transcript_data = transcript.fetch()
-            return " ".join(entry['text'] for entry in transcript_data)
-        except:
-            return None
+                
+        # Last resort: try any transcript and translate
+        transcript = transcript_list.find_manually_created_transcript()
+        if transcript.language_code not in ['en', 'id']:
+            transcript = transcript.translate('en')
+        transcript_data = transcript.fetch()
+        return " ".join(entry['text'] for entry in transcript_data)
 
     except Exception as e:
         print(f"Error getting transcript: {str(e)}")
