@@ -806,6 +806,56 @@ def start_analysis():
         }
     })
 
+@app.route('/test/<video_id>')
+def test_transcript(video_id):
+    """Test endpoint for transcript retrieval using URL parameter"""
+    try:
+        if not video_id:
+            return jsonify({
+                "status": "error",
+                "message": "Please provide a YouTube video ID."
+            }), 400
+            
+        # Get video details first
+        video_details = get_video_details(video_id, API_KEY)
+        if not video_details:
+            return jsonify({
+                "status": "error",
+                "message": "Could not fetch video details. Invalid video ID."
+            }), 404
+            
+        # Get available caption tracks
+        caption_tracks = get_caption_tracks(video_id, API_KEY)
+        
+        # Try to get transcript
+        transcript = get_transcript_v2(video_id, API_KEY)
+        
+        return jsonify({
+            "status": "success",
+            "data": {
+                "video_id": video_id,
+                "video_details": video_details,
+                "available_captions": [
+                    {
+                        "language": track['snippet']['language'],
+                        "type": track['snippet']['trackKind'],
+                        "last_updated": track['snippet']['lastUpdated']
+                    } for track in caption_tracks
+                ],
+                "transcript": {
+                    "available": transcript is not None,
+                    "content": transcript if transcript else None,
+                    "length": len(transcript) if transcript else 0
+                }
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 @app.route('/youtube/log')
 def get_status():
     """Get current status including automation"""
