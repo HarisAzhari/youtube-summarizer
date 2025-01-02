@@ -141,85 +141,101 @@ def get_caption_tracks(video_id, api_key):
         return []
 
 def get_transcript_v2(video_id, api_key):
-    """Enhanced transcript retrieval supporting English and Indonesian content"""
-    print(f"\nAttempting to get transcript for video {video_id}")
+    """Enhanced transcript retrieval with better environment handling"""
+    print(f"\nDebug: Starting transcript retrieval for {video_id}")
+    print(f"Debug: Python encoding: {sys.getdefaultencoding()}")
+    print(f"Debug: Current environment: {'TMUX' in os.environ}")
     
     # First try YouTube's caption API
-    caption_tracks = get_caption_tracks(video_id, api_key)
-    
-    if caption_tracks:
-        print(f"Found {len(caption_tracks)} caption tracks")
-        for track in caption_tracks:
-            try:
-                track_id = track['id']
-                language = track['snippet']['language']
-                track_type = track['snippet']['trackKind']
-                
-                print(f"Processing track: {language} ({track_type})")
-                
-                # Prioritize English and Indonesian tracks
-                if language in ['en', 'en-US', 'en-GB', 'id', 'ind']:
-                    url = f"https://youtube.googleapis.com/youtube/v3/captions/{track_id}?key={api_key}"
-                    headers = {
-                        'Accept': 'application/json'
-                    }
-                    
-                    response = requests.get(url, headers=headers)
-                    if response.status_code == 200:
-                        return response.text
-            except Exception as track_error:
-                print(f"Error processing track: {str(track_error)}")
-                continue
-    
-    # Fallback to youtube_transcript_api with enhanced error handling
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        print("\nDebug: Trying YouTube API method first...")
+        caption_tracks = get_caption_tracks(video_id, api_key)
         
-        # Try English and Indonesian
+        if caption_tracks:
+            print(f"Debug: Found {len(caption_tracks)} caption tracks")
+            for track in caption_tracks:
+                try:
+                    track_id = track['id']
+                    language = track['snippet']['language']
+                    track_type = track['snippet']['trackKind']
+                    
+                    print(f"Debug: Processing track: {language} ({track_type})")
+                    
+                    if language in ['en', 'en-US', 'en-GB', 'id', 'ind']:
+                        url = f"https://youtube.googleapis.com/youtube/v3/captions/{track_id}?key={api_key}"
+                        headers = {'Accept': 'application/json'}
+                        
+                        response = requests.get(url, headers=headers)
+                        if response.status_code == 200:
+                            print("Debug: Successfully retrieved caption track")
+                            return response.text
+                except Exception as e:
+                    print(f"Debug: Error processing track: {str(e)}")
+                    continue
+    except Exception as e:
+        print(f"Debug: YouTube API method failed: {str(e)}")
+    
+    # YouTube API method failed, try youtube_transcript_api
+    print("\nDebug: Trying youtube_transcript_api method...")
+    try:
+        # Set environment encoding explicitly
+        if hasattr(sys, 'setdefaultencoding'):
+            sys.setdefaultencoding('utf-8')
+        
+        # Force encoding for requests
+        import requests.utils
+        requests.utils.default_encoding = 'utf-8'
+        
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        print("Debug: Successfully got transcript list")
+        
+        # Try languages in order
         for lang in ['en', 'id']:
             try:
-                # Try manual transcripts first
+                print(f"\nDebug: Trying {lang} transcript...")
+                # Try manual first
                 try:
                     transcript = transcript_list.find_transcript([lang])
-                    print(f"Found manual transcript in {lang}")
+                    print(f"Debug: Found manual {lang} transcript")
                     break
                 except:
-                    # Try auto-generated
+                    # Then try auto-generated
                     transcript = transcript_list.find_generated_transcript([lang])
-                    print(f"Found auto-generated transcript in {lang}")
+                    print(f"Debug: Found auto-generated {lang} transcript")
                     break
-            except:
+            except Exception as e:
+                print(f"Debug: Error with {lang} transcript: {str(e)}")
                 continue
         
-        # If no English or Indonesian transcript found, try any available and translate
-        if not transcript:
+        # If no English/Indonesian, try any available
+        if 'transcript' not in locals():
+            print("\nDebug: Trying any available transcript...")
             try:
-                available = transcript_list.find_manually_created_transcript()
-                # If original is not in English or Indonesian, translate to English
-                if available.language_code not in ['en', 'id']:
-                    transcript = available.translate('en')
-                else:
-                    transcript = available
-            except:
-                print("No suitable transcript found")
+                transcript = transcript_list.find_manually_created_transcript()
+                if transcript.language_code not in ['en', 'id']:
+                    transcript = transcript.translate('en')
+                print(f"Debug: Found and translated transcript from {transcript.language_code}")
+            except Exception as e:
+                print(f"Debug: Translation attempt failed: {str(e)}")
                 return None
         
-        transcript_data = transcript.fetch()
-        transcript_data.sort(key=lambda x: x['start'])
-        return " ".join(entry['text'] for entry in transcript_data)
-        
-    except Exception as e:
-        print(f"Transcript retrieval failed: {str(e)}")
-        
-        # Log available transcripts for debugging
+        # Get the actual transcript
         try:
-            available = YouTubeTranscriptApi.list_transcripts(video_id)
-            print("\nAvailable transcripts:")
-            for t in available:
-                print(f"- {t.language_code} ({t.language})")
-        except:
-            print("Could not retrieve available transcripts")
-        
+            transcript_data = transcript.fetch()
+            print("\nDebug: Successfully fetched transcript data")
+            
+            transcript_data.sort(key=lambda x: x['start'])
+            full_text = " ".join(entry['text'] for entry in transcript_data)
+            
+            print(f"Debug: Final transcript length: {len(full_text)} characters")
+            return full_text
+            
+        except Exception as e:
+            print(f"Debug: Error fetching transcript data: {str(e)}")
+            return None
+            
+    except Exception as e:
+        print(f"Debug: Final error in transcript retrieval: {str(e)}")
         return None
 
 def get_channel_id_by_handle(handle, api_key):
