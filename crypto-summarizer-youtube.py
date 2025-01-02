@@ -142,64 +142,48 @@ def get_caption_tracks(video_id, api_key):
         return []
 
 def get_transcript_v2(video_id, api_key):
-    """Transcript retrieval with OAuth2 support for captions"""
+    """Get transcript using YouTube's official captions.download endpoint"""
     import requests
     
-    print(f"\nAttempting to get transcript for {video_id}")
-    
     try:
-        # Try using the transcripts API first with v3 data API
-        url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={video_id}&key={api_key}"
+        # First get the caption track ID
+        url = f"https://youtube.googleapis.com/youtube/v3/captions?part=snippet&videoId={video_id}&key={api_key}"
         response = requests.get(url)
+        
+        if response.status_code != 200:
+            print(f"Error fetching captions: {response.text}")
+            return None
+            
         data = response.json()
         
-        if 'items' in data and len(data['items']) > 0:
-            # Check if captions are enabled
-            has_captions = data['items'][0]['snippet'].get('hasCaption', False)
-            if has_captions:
-                # Try a direct request to the timedtext API
-                # This is a less documented but more reliable method
-                formats = [
-                    'srv1',  # ASR captions
-                    'srv3',  # Standard captions
-                    'ttml'   # Another format to try
-                ]
+        if 'items' not in data or not data['items']:
+            print("No caption tracks found")
+            return None
+            
+        # Get the first available English or Indonesian caption
+        caption_id = None
+        for caption in data['items']:
+            lang = caption['snippet']['language']
+            if lang in ['en', 'id']:
+                caption_id = caption['id']
+                break
                 
-                # Try different caption formats
-                for fmt in formats:
-                    try:
-                        timed_text_url = f"https://www.youtube.com/api/timedtext?v={video_id}&lang=en&fmt={fmt}"
-                        response = requests.get(timed_text_url)
-                        
-                        if response.status_code == 200 and response.text:
-                            print(f"Successfully retrieved captions using format: {fmt}")
-                            return response.text
-                    except:
-                        continue
-
-        # If direct methods fail, try youtube_transcript_api as fallback
-        from youtube_transcript_api import YouTubeTranscriptApi
+        if not caption_id:
+            print("No English or Indonesian captions found")
+            return None
+            
+        # Download the actual caption
+        download_url = f"https://youtube.googleapis.com/youtube/v3/captions/{caption_id}?key={api_key}"
+        response = requests.get(download_url, headers={'Accept': 'text/plain'})
         
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        if response.status_code != 200:
+            print(f"Error downloading caption: {response.text}")
+            return None
+            
+        return response.text
         
-        # Try English or Indonesian
-        for lang in ['en', 'id']:
-            try:
-                transcript = transcript_list.find_transcript([lang])
-                transcript_data = transcript.fetch()
-                return " ".join(entry['text'] for entry in transcript_data)
-            except:
-                continue
-                
-        # Last resort: try any transcript and translate
-        transcript = transcript_list.find_manually_created_transcript()
-        if transcript.language_code not in ['en', 'id']:
-            transcript = transcript.translate('en')
-        transcript_data = transcript.fetch()
-        return " ".join(entry['text'] for entry in transcript_data)
-
     except Exception as e:
-        print(f"Error getting transcript: {str(e)}")
+        print(f"Error: {str(e)}")
         return None
 
 def get_channel_id_by_handle(handle, api_key):
