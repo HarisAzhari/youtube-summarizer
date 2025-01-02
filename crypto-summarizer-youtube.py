@@ -58,7 +58,7 @@ def get_next_run_time():
     """Get next 2:03 PM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=14, minute=12, second=0, microsecond=0)
+    next_run = now.replace(hour=14, minute=51, second=0, microsecond=0)
     
     # If it's already past 2:03 PM, schedule for next day
     if now >= next_run:
@@ -217,44 +217,71 @@ def get_video_details(video_id, api_key):
     return None
 
 def get_transcript(video_id):
-    """Get transcript with support for Indonesian and English"""
+    """Get transcript with comprehensive debugging"""
+    print(f"\n{'='*50}")
+    print(f"Transcript Retrieval Debug for video {video_id}")
+    print(f"{'='*50}")
+    
     try:
-        print("\nFetching transcript...")
-        
-        # First, check available transcripts
+        # Step 1: List available transcripts
+        print("\n1. Attempting to list available transcripts...")
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        available_transcripts = list(transcript_list._manually_created_transcripts.keys()) + \
+                              list(transcript_list._generated_transcripts.keys())
+        print(f"Available transcripts: {available_transcripts}")
         
-        # Try to get English transcript first
+        # Step 2: Try English first
+        print("\n2. Attempting to get English transcript...")
         try:
             transcript = transcript_list.find_transcript(['en'])
-        except:
-            # If no English transcript, try to get Indonesian auto-generated one
-            # and translate it to English
+            print("Found English transcript")
+        except Exception as e1:
+            print(f"English transcript error: {str(e1)}")
+            
+            # Step 3: Try auto-generated English
+            print("\n3. Attempting to get auto-generated English...")
             try:
-                transcript = transcript_list.find_transcript(['id'])
-                transcript = transcript.translate('en')
-            except:
-                print("Could not find or translate any available transcripts")
-                return None
+                transcript = transcript_list.find_transcript(['en-generated'])
+                print("Found auto-generated English transcript")
+            except Exception as e2:
+                print(f"Auto-generated English error: {str(e2)}")
+                
+                # Step 4: Try any available language and translate
+                print("\n4. Attempting to find any available transcript...")
+                if available_transcripts:
+                    try:
+                        transcript = transcript_list.find_transcript(available_transcripts)
+                        transcript = transcript.translate('en')
+                        print(f"Found and translated transcript from {available_transcripts[0]}")
+                    except Exception as e3:
+                        print(f"Translation error: {str(e3)}")
+                        return None
+                else:
+                    print("No transcripts available")
+                    return None
         
-        # Get the actual transcript
+        # Step 5: Fetch and process transcript
+        print("\n5. Fetching transcript data...")
         transcript_data = transcript.fetch()
         
-        # Sort transcript entries by start time and combine
+        # Sort and combine transcript parts
         transcript_data.sort(key=lambda x: x['start'])
         full_transcript = " ".join(entry['text'] for entry in transcript_data)
         
+        print("\nSuccess: Transcript retrieved successfully")
+        print(f"Transcript length: {len(full_transcript)} characters")
         return full_transcript.strip()
+        
     except Exception as e:
-        print(f"Error getting transcript: {str(e)}")
-        try:
-            available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-            print("\nAvailable transcripts:")
-            for transcript in available_transcripts:
-                print(f"- {transcript.language_code} ({transcript.language})")
-        except:
-            print("Could not retrieve available transcripts")
+        print(f"\nCritical error in transcript retrieval: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        if hasattr(e, '__traceback__'):
+            import traceback
+            print("Traceback:")
+            traceback.print_tb(e.__traceback__)
         return None
+    finally:
+        print(f"\n{'='*50}\n")
 
 def is_short(duration):
     """Check if video is a Short"""
@@ -787,7 +814,27 @@ def get_results():
             "status": "error",
             "message": str(e)
         })
-    # Add this as a new endpoint
+
+@app.route('/youtube/test_transcript/<video_id>')
+def test_transcript(video_id):
+    """Test endpoint for transcript retrieval with specific video"""
+    try:
+        print(f"\nTesting transcript retrieval for video: {video_id}")
+        transcript = get_transcript(video_id)
+        
+        return jsonify({
+            "status": "success" if transcript else "failed",
+            "has_transcript": bool(transcript),
+            "transcript_length": len(transcript) if transcript else 0,
+            "video_id": video_id
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "video_id": video_id
+        })
 
 @app.route('/check_time')
 def check_time():
