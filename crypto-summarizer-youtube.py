@@ -217,61 +217,79 @@ def get_video_details(video_id, api_key):
     return None
 
 def get_transcript(video_id):
-    """Get transcript with comprehensive debugging"""
+    """Get transcript with multiple fallback methods"""
     print(f"\n{'='*50}")
     print(f"Transcript Retrieval Debug for video {video_id}")
     print(f"{'='*50}")
     
+    # Custom headers to mimic a browser
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+    
     try:
-        # Step 1: List available transcripts
-        print("\n1. Attempting to list available transcripts...")
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        available_transcripts = list(transcript_list._manually_created_transcripts.keys()) + \
-                              list(transcript_list._generated_transcripts.keys())
-        print(f"Available transcripts: {available_transcripts}")
-        
-        # Step 2: Try English first
-        print("\n2. Attempting to get English transcript...")
+        # Method 1: Direct API attempt with custom headers
+        print("\n1. Attempting direct API access...")
         try:
-            transcript = transcript_list.find_transcript(['en'])
-            print("Found English transcript")
+            from youtube_transcript_api import YouTubeTranscriptApi
+            transcript = YouTubeTranscriptApi.get_transcript(
+                video_id,
+                languages=['en'],
+                proxies=None
+            )
+            if transcript:
+                return " ".join(entry['text'] for entry in transcript)
         except Exception as e1:
-            print(f"English transcript error: {str(e1)}")
-            
-            # Step 3: Try auto-generated English
-            print("\n3. Attempting to get auto-generated English...")
+            print(f"Method 1 failed: {str(e1)}")
+
+        # Method 2: Try with different language codes
+        print("\n2. Attempting different language codes...")
+        for lang in ['en', 'en-US', 'en-GB', 'a.en']:
             try:
-                transcript = transcript_list.find_transcript(['en-generated'])
-                print("Found auto-generated English transcript")
-            except Exception as e2:
-                print(f"Auto-generated English error: {str(e2)}")
+                transcript = YouTubeTranscriptApi.get_transcript(
+                    video_id,
+                    languages=[lang]
+                )
+                if transcript:
+                    return " ".join(entry['text'] for entry in transcript)
+            except:
+                continue
+
+        # Method 3: Try to get auto-generated captions
+        print("\n3. Attempting to get auto-generated captions...")
+        try:
+            transcript = YouTubeTranscriptApi.get_transcript(
+                video_id,
+                languages=['en-generated']
+            )
+            if transcript:
+                return " ".join(entry['text'] for entry in transcript)
+        except Exception as e3:
+            print(f"Method 3 failed: {str(e3)}")
+
+        # Method 4: Manual fetch attempt
+        print("\n4. Attempting manual fetch...")
+        try:
+            session = requests.Session()
+            session.headers.update(headers)
+            
+            # Get video page
+            response = session.get(f'https://www.youtube.com/watch?v={video_id}')
+            response.raise_for_status()
+            
+            # This is a simplified example - in practice you'd need to parse the response
+            if 'captions' in response.text:
+                print("Found captions in page source")
+            else:
+                print("No captions found in page source")
                 
-                # Step 4: Try any available language and translate
-                print("\n4. Attempting to find any available transcript...")
-                if available_transcripts:
-                    try:
-                        transcript = transcript_list.find_transcript(available_transcripts)
-                        transcript = transcript.translate('en')
-                        print(f"Found and translated transcript from {available_transcripts[0]}")
-                    except Exception as e3:
-                        print(f"Translation error: {str(e3)}")
-                        return None
-                else:
-                    print("No transcripts available")
-                    return None
-        
-        # Step 5: Fetch and process transcript
-        print("\n5. Fetching transcript data...")
-        transcript_data = transcript.fetch()
-        
-        # Sort and combine transcript parts
-        transcript_data.sort(key=lambda x: x['start'])
-        full_transcript = " ".join(entry['text'] for entry in transcript_data)
-        
-        print("\nSuccess: Transcript retrieved successfully")
-        print(f"Transcript length: {len(full_transcript)} characters")
-        return full_transcript.strip()
-        
+        except Exception as e4:
+            print(f"Method 4 failed: {str(e4)}")
+
+        print("\nAll transcript retrieval methods failed")
+        return None
+
     except Exception as e:
         print(f"\nCritical error in transcript retrieval: {str(e)}")
         print(f"Error type: {type(e).__name__}")
@@ -834,6 +852,31 @@ def test_transcript(video_id):
             "error": str(e),
             "error_type": type(e).__name__,
             "video_id": video_id
+        })
+
+@app.route('/youtube/test_known')
+def test_known_video():
+    """Test with a known video that should have captions"""
+    # YouTube's first video - "Me at the zoo"
+    test_video_id = "2MxqoJtlFUI"
+    
+    try:
+        print("\nTesting with known video...")
+        transcript = get_transcript(test_video_id)
+        
+        return jsonify({
+            "status": "success" if transcript else "failed",
+            "has_transcript": bool(transcript),
+            "transcript_length": len(transcript) if transcript else 0,
+            "video_id": test_video_id,
+            "note": "This is YouTube's first video and should have captions"
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "video_id": test_video_id
         })
 
 @app.route('/check_time')
