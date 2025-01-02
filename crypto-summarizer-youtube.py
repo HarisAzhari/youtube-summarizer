@@ -1,3 +1,4 @@
+# All imports remain the same
 from flask import Flask, jsonify
 from datetime import datetime, timedelta
 import threading
@@ -19,6 +20,21 @@ CORS(app)
 # Configuration
 DB_PATH = 'youtube_crypto.db'
 API_KEY = 'AIzaSyBURNh4emPOxwY5Uvdj78oObc3HxByomn0'
+
+# Combined channel list including Indonesian channels
+ALL_CHANNELS = [
+    # Original channels
+    '@CoinBureau', '@MeetKevin', 'UCQglaVhGOBI0BR5S6IJnQPg', '@AltcoinDaily',
+    '@CryptosRUs', '@elliotrades_official', '@DataDash', '@IvanOnTech',
+    '@TheCryptoLark', '@CryptoCasey', '@AnthonyPompliano', '@alessiorastani',
+    '@CryptoCapitalVenture', '@aantonop', '@Boxmining', '@CryptoZombie',
+    '@tonevays', '@ScottMelker', '@CTOLARSSON', '@Bankless', '@gemgemcrypto',
+    # Indonesian channels
+    '@@AnggaAndinata', '@RepublikRupiahOfficial', '@AkademiCrypto',
+    '@felicia.tjiasaka', '@Coinvestasi', '@TimothyRonald', '@AndySenjaya',
+    '@leon.hartono'
+]
+
 # Status tracking
 analysis_status = {
     "is_running": False,
@@ -26,8 +42,37 @@ analysis_status = {
     "current_stage": None,
     "channels_processed": 0,
     "total_channels": 0,
-    "errors": []
+    "errors": [],
+    "processed_videos": 0,
+    "skipped_videos": 0
 }
+
+# Automation status
+automation_status = {
+    "is_scheduled": False,
+    "next_run_time": None,
+    "last_execution": None
+}
+
+def get_next_run_time():
+    """Get next 6 AM MYT run time"""
+    malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+    now = datetime.now(malaysia_tz)
+    next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    
+    # If it's already past 6 AM, schedule for next day
+    if now >= next_run:
+        next_run = next_run + timedelta(days=1)
+    
+    return next_run
+
+
+def check_title_exists(title):
+    """Check if a video with this title has already been processed"""
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute('SELECT 1 FROM videos WHERE title = ?', (title,))
+        return c.fetchone() is not None
 
 def init_db():
     """Initialize SQLite database with JSON storage for reasons"""
@@ -175,14 +220,43 @@ def get_video_details(video_id, api_key):
     return None
 
 def get_transcript(video_id):
-    """Get video transcript"""
+    """Get transcript with support for Indonesian and English"""
     try:
-        print(f"\nFetching transcript for {video_id}...")
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        transcript_list.sort(key=lambda x: x['start'])
-        return " ".join(entry['text'] for entry in transcript_list).strip()
+        print("\nFetching transcript...")
+        
+        # First, check available transcripts
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Try to get English transcript first
+        try:
+            transcript = transcript_list.find_transcript(['en'])
+        except:
+            # If no English transcript, try to get Indonesian auto-generated one
+            # and translate it to English
+            try:
+                transcript = transcript_list.find_transcript(['id'])
+                transcript = transcript.translate('en')
+            except:
+                print("Could not find or translate any available transcripts")
+                return None
+        
+        # Get the actual transcript
+        transcript_data = transcript.fetch()
+        
+        # Sort transcript entries by start time and combine
+        transcript_data.sort(key=lambda x: x['start'])
+        full_transcript = " ".join(entry['text'] for entry in transcript_data)
+        
+        return full_transcript.strip()
     except Exception as e:
         print(f"Error getting transcript: {str(e)}")
+        try:
+            available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
+            print("\nAvailable transcripts:")
+            for transcript in available_transcripts:
+                print(f"- {transcript.language_code} ({transcript.language})")
+        except:
+            print("Could not retrieve available transcripts")
         return None
 
 def is_short(duration):
@@ -197,14 +271,13 @@ def is_short(duration):
     return True
 
 def check_recent_videos(playlist_id, api_key, channel_info):
-    """Check for videos from the past month"""
+    """Check for videos from the past day"""
     videos = []
     next_page_token = None
     now = datetime.now(pytz.UTC)
-    month_ago = now - timedelta(days=30)  # Changed from 24 hours to 30 days
+    day_ago = now - timedelta(days=1)
     
     while True:
-        # Build URL with page token if it exists
         base_url = f"https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={playlist_id}&maxResults=50&key={api_key}"
         url = f"{base_url}&pageToken={next_page_token}" if next_page_token else base_url
         
@@ -222,8 +295,14 @@ def check_recent_videos(playlist_id, api_key, channel_info):
                     '%Y-%m-%dT%H:%M:%SZ'
                 ).replace(tzinfo=pytz.UTC)
                 
-                if publish_time > month_ago:  # Changed from day_ago to month_ago
+                if publish_time > day_ago:
                     video_id = video['snippet']['resourceId']['videoId']
+                    
+                    # Check if video title exists before getting details
+                    if check_title_exists(video['snippet']['title']):
+                        print(f"Skipping duplicate video: {video['snippet']['title']}")
+                        continue
+                        
                     video_details = get_video_details(video_id, api_key)
                     
                     if video_details and not is_short(video_details['duration']):
@@ -241,11 +320,9 @@ def check_recent_videos(playlist_id, api_key, channel_info):
                 else:
                     found_old_video = True
             
-            # If we found a video older than a month, we can stop paginating
             if found_old_video:
                 break
                 
-            # Check if there are more pages
             next_page_token = data.get('nextPageToken')
             if not next_page_token:
                 break
@@ -254,7 +331,6 @@ def check_recent_videos(playlist_id, api_key, channel_info):
             print(f"Error checking videos: {str(e)}")
             break
     
-    # Sort videos by publish date, newest first
     if videos:
         videos.sort(key=lambda x: x['published_at'], reverse=True)
     
@@ -433,143 +509,218 @@ def store_results(video_info, transcript, analysis):
         else:
             print(f"Warning: No analysis data for video {video_info['video_id']}")
 
+
 def process_channels():
-    """Main processing function"""
-    global analysis_status
+    """Main processing function with automation"""
+    global analysis_status, automation_status
     
-    channels = [
-        '@CoinBureau', '@MeetKevin', 'UCQglaVhGOBI0BR5S6IJnQPg', '@AltcoinDaily',
-        '@CryptosRUs', '@elliotrades_official', '@DataDash', '@IvanOnTech',
-        '@TheCryptoLark', '@CryptoCasey', '@AnthonyPompliano', '@alessiorastani',
-        '@CryptoCapitalVenture', '@aantonop', '@Boxmining', '@CryptoZombie',
-        '@tonevays', '@ScottMelker', '@CTOLARSSON', '@Bankless', '@gemgemcrypto'
-    ]
-    
-    analysis_status["total_channels"] = len(channels)
-    
-    # Configure Gemini
-    genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-    
-    for handle in channels:
+    while True:
         try:
-            print(f"\nProcessing channel: {handle}")
-            analysis_status["current_channel"] = handle
-            analysis_status["current_stage"] = "Getting channel info"
+            # Get current time in MYT
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            now = datetime.now(malaysia_tz)
             
-            # Get channel ID with detailed error handling
-            channel_info = get_channel_id_by_handle(handle, API_KEY)
-            if not channel_info:
-                raise Exception(f"Failed to get channel info for {handle}")
-            
-            print(f"Successfully got channel info for {handle}: {channel_info}")
-            
-            # Get uploads playlist
-            analysis_status["current_stage"] = "Getting playlist"
-            playlist_id = get_uploads_playlist_id(channel_info['channelId'], API_KEY)
-            
-            if not playlist_id:
-                raise Exception(f"Could not get uploads playlist for {handle}")
+            # If automation is scheduled, check timing
+            if automation_status["is_scheduled"]:
+                next_run = automation_status["next_run_time"]
                 
-            print(f"Got playlist ID for {handle}: {playlist_id}")
-            
-            # Check recent videos
-            analysis_status["current_stage"] = "Checking recent videos"
-            videos = check_recent_videos(playlist_id, API_KEY, channel_info)
-            
-            if videos:
-                print(f"\nFound {len(videos)} recent videos for {handle}")
+                # Wait until next run time
+                if now < next_run:
+                    time.sleep(60)  # Check every minute
+                    continue
                 
-                for video_info in videos:
-                    analysis_status["current_stage"] = f"Processing video: {video_info['video_title']}"
+                # Update next run time for tomorrow
+                automation_status["next_run_time"] = next_run + timedelta(days=1)
+                automation_status["last_execution"] = now
+            
+            # Reset analysis status before starting
+            analysis_status.update({
+                "is_running": True,
+                "current_channel": None,
+                "current_stage": "initializing",
+                "channels_processed": 0,
+                "total_channels": len(ALL_CHANNELS),
+                "errors": [],
+                "processed_videos": 0,
+                "skipped_videos": 0
+            })
+            
+            # Configure Gemini
+            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+            
+            # Process each channel
+            for handle in ALL_CHANNELS:
+                try:
+                    print(f"\nProcessing channel: {handle}")
+                    analysis_status["current_channel"] = handle
+                    analysis_status["current_stage"] = "Getting channel info"
                     
-                    # Get transcript
-                    transcript = get_transcript(video_info['video_id'])
+                    channel_info = get_channel_id_by_handle(handle, API_KEY)
+                    if not channel_info:
+                        raise Exception(f"Failed to get channel info for {handle}")
                     
-                    if transcript:
-                        # Analyze transcript
-                        analysis = summarize_text(transcript, model)
+                    analysis_status["current_stage"] = "Getting playlist"
+                    playlist_id = get_uploads_playlist_id(channel_info['channelId'], API_KEY)
+                    
+                    if not playlist_id:
+                        raise Exception(f"Could not get uploads playlist for {handle}")
+                    
+                    analysis_status["current_stage"] = "Checking recent videos"
+                    videos = check_recent_videos(playlist_id, API_KEY, channel_info)
+                    
+                    if videos:
+                        print(f"\nFound {len(videos)} recent videos for {handle}")
                         
-                        if analysis:
-                            # Store results
-                            store_results(video_info, transcript, analysis)
-                            print(f"Successfully processed: {video_info['video_title']}")
+                        for video_info in videos:
+                            analysis_status["current_stage"] = f"Processing video: {video_info['video_title']}"
+                            
+                            transcript = get_transcript(video_info['video_id'])
+                            
+                            if transcript:
+                                analysis = summarize_text(transcript, model)
+                                
+                                if analysis:
+                                    store_results(video_info, transcript, analysis)
+                                    print(f"Successfully processed: {video_info['video_title']}")
+                                    analysis_status["processed_videos"] += 1
+                            else:
+                                print(f"No transcript available: {video_info['video_title']}")
+                                analysis_status["skipped_videos"] += 1
                     else:
-                        print(f"No transcript available for: {video_info['video_title']}")
-            else:
-                print(f"No recent videos found for {handle}")
+                        print(f"No recent videos found for {handle}")
+                    
+                    analysis_status["channels_processed"] += 1
+                    
+                except Exception as e:
+                    error_msg = f"{handle}: {str(e)}"
+                    print(f"Error processing channel {handle}: {str(e)}")
+                    analysis_status["errors"].append(error_msg)
+                
+                time.sleep(1)  # Rate limiting
             
-            analysis_status["channels_processed"] += 1
+            # Reset running status but keep other stats for logging
+            analysis_status["is_running"] = False
+            analysis_status["current_channel"] = None
+            analysis_status["current_stage"] = None
+            
+            # If not automated, break the loop
+            if not automation_status["is_scheduled"]:
+                break
+                
+            print(f"Completed run at {now}. Next run scheduled for {automation_status['next_run_time']}")
             
         except Exception as e:
-            error_msg = f"{handle}: {str(e)}"
-            print(f"Error processing channel {handle}: {str(e)}")
-            analysis_status["errors"].append(error_msg)
-        
-        time.sleep(1)  # Rate limiting
-    
-    analysis_status["is_running"] = False
-    analysis_status["current_channel"] = None
-    analysis_status["current_stage"] = None
+            print(f"Error in process_channels: {str(e)}")
+            if not automation_status["is_scheduled"]:
+                break
+            time.sleep(60)  # Wait before retrying
 
-@app.route('/youtube/start')
-def start_analysis():
-    """Start the analysis process"""
-    global analysis_status
+def process_channels():
+    """Main processing function with automation"""
+    global analysis_status, automation_status
     
-    if analysis_status["is_running"]:
-        current_progress = {
-            "current_channel": analysis_status["current_channel"],
-            "current_stage": analysis_status["current_stage"],
-            "processed": analysis_status["channels_processed"],
-            "total": analysis_status["total_channels"]
-        }
-        
-        return jsonify({
-            "status": "in_progress",
-            "message": "Analysis is currently running",
-            "progress": current_progress,
-            "eta_minutes": (analysis_status["total_channels"] - analysis_status["channels_processed"]) * 2  # Rough estimate
-        }), 409  # HTTP 409 Conflict
-    
-    # Reset status
-    analysis_status.update({
-        "is_running": True,
-        "current_channel": None,
-        "current_stage": "initializing",
-        "channels_processed": 0,
-        "total_channels": 0,
-        "errors": [],
-        "start_time": datetime.now().isoformat()
-    })
-    
-    # Start processing in background
-    thread = threading.Thread(target=process_channels)
-    thread.daemon = True
-    thread.start()
-    
-    return jsonify({
-        "status": "success",
-        "message": "YouTube analysis process started",
-        "started_at": analysis_status["start_time"]
-    })
-
-@app.route('/youtube/log')
-def get_status():
-    """Get current status"""
-    return jsonify({
-        "status": "success",
-        "data": {
-            "is_running": analysis_status["is_running"],
-            "current_channel": analysis_status["current_channel"],
-            "current_stage": analysis_status["current_stage"],
-            "progress": {
-                "processed": analysis_status["channels_processed"],
-                "total": analysis_status["total_channels"]
-            },
-            "errors": analysis_status["errors"]
-        }
-    })
+    while True:
+        try:
+            # Get current time in MYT
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            now = datetime.now(malaysia_tz)
+            
+            # If automation is scheduled, check timing
+            if automation_status["is_scheduled"]:
+                next_run = automation_status["next_run_time"]
+                
+                # Wait until next run time
+                if now < next_run:
+                    time.sleep(60)  # Check every minute
+                    continue
+                
+                # Update next run time for tomorrow
+                automation_status["next_run_time"] = next_run + timedelta(days=1)
+                automation_status["last_execution"] = now
+            
+            # Reset analysis status before starting
+            analysis_status.update({
+                "is_running": True,
+                "current_channel": None,
+                "current_stage": "initializing",
+                "channels_processed": 0,
+                "total_channels": len(ALL_CHANNELS),
+                "errors": [],
+                "processed_videos": 0,
+                "skipped_videos": 0
+            })
+            
+            # Configure Gemini
+            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+            
+            # Process each channel
+            for handle in ALL_CHANNELS:
+                try:
+                    print(f"\nProcessing channel: {handle}")
+                    analysis_status["current_channel"] = handle
+                    analysis_status["current_stage"] = "Getting channel info"
+                    
+                    channel_info = get_channel_id_by_handle(handle, API_KEY)
+                    if not channel_info:
+                        raise Exception(f"Failed to get channel info for {handle}")
+                    
+                    analysis_status["current_stage"] = "Getting playlist"
+                    playlist_id = get_uploads_playlist_id(channel_info['channelId'], API_KEY)
+                    
+                    if not playlist_id:
+                        raise Exception(f"Could not get uploads playlist for {handle}")
+                    
+                    analysis_status["current_stage"] = "Checking recent videos"
+                    videos = check_recent_videos(playlist_id, API_KEY, channel_info)
+                    
+                    if videos:
+                        print(f"\nFound {len(videos)} recent videos for {handle}")
+                        
+                        for video_info in videos:
+                            analysis_status["current_stage"] = f"Processing video: {video_info['video_title']}"
+                            
+                            transcript = get_transcript(video_info['video_id'])
+                            
+                            if transcript:
+                                analysis = summarize_text(transcript, model)
+                                
+                                if analysis:
+                                    store_results(video_info, transcript, analysis)
+                                    print(f"Successfully processed: {video_info['video_title']}")
+                                    analysis_status["processed_videos"] += 1
+                            else:
+                                print(f"No transcript available: {video_info['video_title']}")
+                                analysis_status["skipped_videos"] += 1
+                    else:
+                        print(f"No recent videos found for {handle}")
+                    
+                    analysis_status["channels_processed"] += 1
+                    
+                except Exception as e:
+                    error_msg = f"{handle}: {str(e)}"
+                    print(f"Error processing channel {handle}: {str(e)}")
+                    analysis_status["errors"].append(error_msg)
+                
+                time.sleep(1)  # Rate limiting
+            
+            # Reset running status but keep other stats for logging
+            analysis_status["is_running"] = False
+            analysis_status["current_channel"] = None
+            analysis_status["current_stage"] = None
+            
+            # If not automated, break the loop
+            if not automation_status["is_scheduled"]:
+                break
+                
+            print(f"Completed run at {now}. Next run scheduled for {automation_status['next_run_time']}")
+            
+        except Exception as e:
+            print(f"Error in process_channels: {str(e)}")
+            if not automation_status["is_scheduled"]:
+                break
+            time.sleep(60)  # Wait before retrying
 
 @app.route('/youtube/get')
 def get_results():
@@ -622,7 +773,35 @@ def get_results():
             "status": "error",
             "message": str(e)
         })
-
+    # Add this as a new endpoint
+@app.route('/check_time')
+def check_time():
+    """Get current local time in Malaysia timezone"""
+    try:
+        # Get current time in UTC
+        utc_time = datetime.now(pytz.UTC)
+        
+        # Convert to Malaysia timezone (MYT - Malaysia Time)
+        malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+        local_time = utc_time.astimezone(malaysia_tz)
+        
+        return jsonify({
+            "status": "success",
+            "data": {
+                "utc_time": utc_time.isoformat(),
+                "local_time": local_time.isoformat(),
+                "timezone": "Malaysia Time (MYT)",
+                "formatted_time": local_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                # Adding a more human-readable format
+                "readable_time": local_time.strftime("%A, %d %B %Y, %I:%M:%S %p")
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
 if __name__ == '__main__':
     init_db()
     app.run(port=8080, host='0.0.0.0')
