@@ -55,12 +55,12 @@ automation_status = {
 }
 
 def get_next_run_time():
-    """Get next 2:03 PM MYT run time"""
+    """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=14, minute=51, second=0, microsecond=0)
+    next_run = now.replace(hour=18, minute=26, second=0, microsecond=0)
     
-    # If it's already past 2:03 PM, schedule for next day
+    # If it's already past 6 AM, schedule for next day
     if now >= next_run:
         next_run = next_run + timedelta(days=1)
     
@@ -123,6 +123,104 @@ def init_db():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+def get_caption_tracks(video_id, api_key):
+    """Get available caption tracks for a video"""
+    url = f"https://youtube.googleapis.com/youtube/v3/captions?part=snippet&videoId={video_id}&key={api_key}"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        if 'items' in data:
+            return data['items']
+        return []
+    except Exception as e:
+        print(f"Error getting caption tracks: {str(e)}")
+        return []
+
+def get_transcript_v2(video_id, api_key):
+    """Enhanced transcript retrieval supporting English and Indonesian content"""
+    print(f"\nAttempting to get transcript for video {video_id}")
+    
+    # First try YouTube's caption API
+    caption_tracks = get_caption_tracks(video_id, api_key)
+    
+    if caption_tracks:
+        print(f"Found {len(caption_tracks)} caption tracks")
+        for track in caption_tracks:
+            try:
+                track_id = track['id']
+                language = track['snippet']['language']
+                track_type = track['snippet']['trackKind']
+                
+                print(f"Processing track: {language} ({track_type})")
+                
+                # Prioritize English and Indonesian tracks
+                if language in ['en', 'en-US', 'en-GB', 'id', 'ind']:
+                    url = f"https://youtube.googleapis.com/youtube/v3/captions/{track_id}?key={api_key}"
+                    headers = {
+                        'Accept': 'application/json'
+                    }
+                    
+                    response = requests.get(url, headers=headers)
+                    if response.status_code == 200:
+                        return response.text
+            except Exception as track_error:
+                print(f"Error processing track: {str(track_error)}")
+                continue
+    
+    # Fallback to youtube_transcript_api with enhanced error handling
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Try English and Indonesian
+        for lang in ['en', 'id']:
+            try:
+                # Try manual transcripts first
+                try:
+                    transcript = transcript_list.find_transcript([lang])
+                    print(f"Found manual transcript in {lang}")
+                    break
+                except:
+                    # Try auto-generated
+                    transcript = transcript_list.find_generated_transcript([lang])
+                    print(f"Found auto-generated transcript in {lang}")
+                    break
+            except:
+                continue
+        
+        # If no English or Indonesian transcript found, try any available and translate
+        if not transcript:
+            try:
+                available = transcript_list.find_manually_created_transcript()
+                # If original is not in English or Indonesian, translate to English
+                if available.language_code not in ['en', 'id']:
+                    transcript = available.translate('en')
+                else:
+                    transcript = available
+            except:
+                print("No suitable transcript found")
+                return None
+        
+        transcript_data = transcript.fetch()
+        transcript_data.sort(key=lambda x: x['start'])
+        return " ".join(entry['text'] for entry in transcript_data)
+        
+    except Exception as e:
+        print(f"Transcript retrieval failed: {str(e)}")
+        
+        # Log available transcripts for debugging
+        try:
+            available = YouTubeTranscriptApi.list_transcripts(video_id)
+            print("\nAvailable transcripts:")
+            for t in available:
+                print(f"- {t.language_code} ({t.language})")
+        except:
+            print("Could not retrieve available transcripts")
+        
+        return None
 
 def get_channel_id_by_handle(handle, api_key):
     """Get channel ID from handle with improved error handling"""
@@ -217,84 +315,44 @@ def get_video_details(video_id, api_key):
     return None
 
 def get_transcript(video_id):
-    """Get transcript with innertube API attempt"""
-    print(f"\n{'='*50}")
-    print(f"Transcript Retrieval Debug for video {video_id}")
-    print(f"{'='*50}")
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Origin': 'https://www.youtube.com'
-    }
-
+    """Get transcript with support for Indonesian and English"""
     try:
-        # Method 1: Try innertube API
-        print("\n1. Attempting innertube API access...")
+        print("\nFetching transcript...")
+        
+        # First, check available transcripts
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Try to get English transcript first
         try:
-            session = requests.Session()
-            session.headers.update(headers)
-            
-            # First get client config
-            response = session.get(f'https://www.youtube.com/watch?v={video_id}')
-            response.raise_for_status()
-            
-            # Extract INNERTUBE_API_KEY
-            import re
-            api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', response.text)
-            if api_key_match:
-                innertube_key = api_key_match.group(1)
-                print(f"Found innertube key: {innertube_key[:10]}...")
-                
-                # Get transcript data
-                url = f'https://www.youtube.com/youtubei/v1/get_transcript?key={innertube_key}'
-                data = {
-                    "context": {
-                        "client": {
-                            "clientName": "WEB",
-                            "clientVersion": "2.20220801"
-                        }
-                    },
-                    "params": video_id
-                }
-                
-                response = session.post(url, json=data)
-                response.raise_for_status()
-                print("Response status:", response.status_code)
-                print("Response preview:", response.text[:200])
-                
-                if response.status_code == 200:
-                    transcript_data = response.json()
-                    # Process transcript data
-                    print("Successfully got transcript data")
-                    return "Transcript data found"  # We'll process the actual transcript later
-            else:
-                print("Could not find innertube key")
-                
-        except Exception as e:
-            print(f"Innertube method failed: {str(e)}")
-
-        # Fallback to original methods...
-        print("\n2. Attempting direct API access...")
-        try:
-            transcript = YouTubeTranscriptApi.get_transcript(
-                video_id,
-                languages=['en'],
-                proxies=None
-            )
-            if transcript:
-                return " ".join(entry['text'] for entry in transcript)
-        except Exception as e:
-            print(f"Direct API failed: {str(e)}")
-
-        print("\nAll methods failed")
-        return None
-
+            transcript = transcript_list.find_transcript(['en'])
+        except:
+            # If no English transcript, try to get Indonesian auto-generated one
+            # and translate it to English
+            try:
+                transcript = transcript_list.find_transcript(['id'])
+                transcript = transcript.translate('en')
+            except:
+                print("Could not find or translate any available transcripts")
+                return None
+        
+        # Get the actual transcript
+        transcript_data = transcript.fetch()
+        
+        # Sort transcript entries by start time and combine
+        transcript_data.sort(key=lambda x: x['start'])
+        full_transcript = " ".join(entry['text'] for entry in transcript_data)
+        
+        return full_transcript.strip()
     except Exception as e:
-        print(f"\nCritical error: {str(e)}")
+        print(f"Error getting transcript: {str(e)}")
+        try:
+            available_transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
+            print("\nAvailable transcripts:")
+            for transcript in available_transcripts:
+                print(f"- {transcript.language_code} ({transcript.language})")
+        except:
+            print("Could not retrieve available transcripts")
         return None
-    finally:
-        print(f"\n{'='*50}\n")
 
 def is_short(duration):
     """Check if video is a Short"""
@@ -590,7 +648,7 @@ def store_results(video_info, transcript, analysis):
 
 
 def process_channels():
-    """Main processing function with automation"""
+    """Main processing function with updated transcript retrieval"""
     global analysis_status, automation_status
     
     while True:
@@ -649,16 +707,14 @@ def process_channels():
                     videos = check_recent_videos(playlist_id, API_KEY, channel_info)
                     
                     if videos:
-                        print(f"\nFound {len(videos)} recent videos for {handle}")
-                        
                         for video_info in videos:
                             analysis_status["current_stage"] = f"Processing video: {video_info['video_title']}"
                             
-                            transcript = get_transcript(video_info['video_id'])
+                            # Use new transcript method
+                            transcript = get_transcript_v2(video_info['video_id'], API_KEY)
                             
                             if transcript:
                                 analysis = summarize_text(transcript, model)
-                                
                                 if analysis:
                                     store_results(video_info, transcript, analysis)
                                     print(f"Successfully processed: {video_info['video_title']}")
@@ -827,58 +883,7 @@ def get_results():
             "status": "error",
             "message": str(e)
         })
-
-@app.route('/youtube/test_fetch/<video_id>')
-def test_video_fetch(video_id):
-    """Test raw video page fetch"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        response = requests.get(
-            f'https://www.youtube.com/watch?v={video_id}',
-            headers=headers
-        )
-        
-        return jsonify({
-            "status": "success",
-            "status_code": response.status_code,
-            "headers": dict(response.headers),
-            "content_preview": response.text[:500],
-            "content_length": len(response.text)
-        })
-        
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "error": str(e)
-        })
-
-@app.route('/youtube/test_known')
-def test_known_video():
-    """Test with a known video that should have captions"""
-    # YouTube's first video - "Me at the zoo"
-    test_video_id = "2MxqoJtlFUI"
-    
-    try:
-        print("\nTesting with known video...")
-        transcript = get_transcript(test_video_id)
-        
-        return jsonify({
-            "status": "success" if transcript else "failed",
-            "has_transcript": bool(transcript),
-            "transcript_length": len(transcript) if transcript else 0,
-            "video_id": test_video_id,
-            "note": "This is YouTube's first video and should have captions"
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "video_id": test_video_id
-        })
+    # Add this as a new endpoint
 
 @app.route('/check_time')
 def check_time():
