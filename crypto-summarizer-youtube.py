@@ -142,48 +142,43 @@ def get_caption_tracks(video_id, api_key):
         return []
 
 def get_transcript_v2(video_id, api_key):
-    """Get transcript using YouTube's official captions.download endpoint"""
+    """Get transcript using youtube_transcript_api with proxy support"""
+    from youtube_transcript_api import YouTubeTranscriptApi
     import requests
     
+    # Configure proxy
+    proxies = {
+        'http': 'http://127.0.0.1:8080',
+        'https': 'http://127.0.0.1:8080'
+    }
+    
+    # Configure the transcript API to use proxies
+    YouTubeTranscriptApi.proxies = proxies
+    
     try:
-        # First get the caption track ID
-        url = f"https://youtube.googleapis.com/youtube/v3/captions?part=snippet&videoId={video_id}&key={api_key}"
-        response = requests.get(url)
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
-        if response.status_code != 200:
-            print(f"Error fetching captions: {response.text}")
-            return None
-            
-        data = response.json()
-        
-        if 'items' not in data or not data['items']:
-            print("No caption tracks found")
-            return None
-            
-        # Get the first available English or Indonesian caption
-        caption_id = None
-        for caption in data['items']:
-            lang = caption['snippet']['language']
-            if lang in ['en', 'id']:
-                caption_id = caption['id']
-                break
+        # Try English or Indonesian
+        for lang in ['en', 'id']:
+            try:
+                transcript = transcript_list.find_transcript([lang])
+                transcript_data = transcript.fetch()
+                return " ".join(entry['text'] for entry in transcript_data)
+            except:
+                continue
                 
-        if not caption_id:
-            print("No English or Indonesian captions found")
+        # If no English/Indonesian, try any transcript and translate
+        try:
+            transcript = transcript_list.find_manually_created_transcript()
+            if transcript.language_code not in ['en', 'id']:
+                transcript = transcript.translate('en')
+            transcript_data = transcript.fetch()
+            return " ".join(entry['text'] for entry in transcript_data)
+        except:
             return None
-            
-        # Download the actual caption
-        download_url = f"https://youtube.googleapis.com/youtube/v3/captions/{caption_id}?key={api_key}"
-        response = requests.get(download_url, headers={'Accept': 'text/plain'})
-        
-        if response.status_code != 200:
-            print(f"Error downloading caption: {response.text}")
-            return None
-            
-        return response.text
-        
+
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Error getting transcript: {str(e)}")
         return None
 
 def get_channel_id_by_handle(handle, api_key):
