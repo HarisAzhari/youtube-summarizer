@@ -217,22 +217,66 @@ def get_video_details(video_id, api_key):
     return None
 
 def get_transcript(video_id):
-    """Get transcript with multiple fallback methods"""
+    """Get transcript with innertube API attempt"""
     print(f"\n{'='*50}")
     print(f"Transcript Retrieval Debug for video {video_id}")
     print(f"{'='*50}")
     
-    # Custom headers to mimic a browser
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://www.youtube.com'
     }
-    
+
     try:
-        # Method 1: Direct API attempt with custom headers
-        print("\n1. Attempting direct API access...")
+        # Method 1: Try innertube API
+        print("\n1. Attempting innertube API access...")
         try:
-            from youtube_transcript_api import YouTubeTranscriptApi
+            session = requests.Session()
+            session.headers.update(headers)
+            
+            # First get client config
+            response = session.get(f'https://www.youtube.com/watch?v={video_id}')
+            response.raise_for_status()
+            
+            # Extract INNERTUBE_API_KEY
+            import re
+            api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', response.text)
+            if api_key_match:
+                innertube_key = api_key_match.group(1)
+                print(f"Found innertube key: {innertube_key[:10]}...")
+                
+                # Get transcript data
+                url = f'https://www.youtube.com/youtubei/v1/get_transcript?key={innertube_key}'
+                data = {
+                    "context": {
+                        "client": {
+                            "clientName": "WEB",
+                            "clientVersion": "2.20220801"
+                        }
+                    },
+                    "params": video_id
+                }
+                
+                response = session.post(url, json=data)
+                response.raise_for_status()
+                print("Response status:", response.status_code)
+                print("Response preview:", response.text[:200])
+                
+                if response.status_code == 200:
+                    transcript_data = response.json()
+                    # Process transcript data
+                    print("Successfully got transcript data")
+                    return "Transcript data found"  # We'll process the actual transcript later
+            else:
+                print("Could not find innertube key")
+                
+        except Exception as e:
+            print(f"Innertube method failed: {str(e)}")
+
+        # Fallback to original methods...
+        print("\n2. Attempting direct API access...")
+        try:
             transcript = YouTubeTranscriptApi.get_transcript(
                 video_id,
                 languages=['en'],
@@ -240,63 +284,14 @@ def get_transcript(video_id):
             )
             if transcript:
                 return " ".join(entry['text'] for entry in transcript)
-        except Exception as e1:
-            print(f"Method 1 failed: {str(e1)}")
+        except Exception as e:
+            print(f"Direct API failed: {str(e)}")
 
-        # Method 2: Try with different language codes
-        print("\n2. Attempting different language codes...")
-        for lang in ['en', 'en-US', 'en-GB', 'a.en']:
-            try:
-                transcript = YouTubeTranscriptApi.get_transcript(
-                    video_id,
-                    languages=[lang]
-                )
-                if transcript:
-                    return " ".join(entry['text'] for entry in transcript)
-            except:
-                continue
-
-        # Method 3: Try to get auto-generated captions
-        print("\n3. Attempting to get auto-generated captions...")
-        try:
-            transcript = YouTubeTranscriptApi.get_transcript(
-                video_id,
-                languages=['en-generated']
-            )
-            if transcript:
-                return " ".join(entry['text'] for entry in transcript)
-        except Exception as e3:
-            print(f"Method 3 failed: {str(e3)}")
-
-        # Method 4: Manual fetch attempt
-        print("\n4. Attempting manual fetch...")
-        try:
-            session = requests.Session()
-            session.headers.update(headers)
-            
-            # Get video page
-            response = session.get(f'https://www.youtube.com/watch?v={video_id}')
-            response.raise_for_status()
-            
-            # This is a simplified example - in practice you'd need to parse the response
-            if 'captions' in response.text:
-                print("Found captions in page source")
-            else:
-                print("No captions found in page source")
-                
-        except Exception as e4:
-            print(f"Method 4 failed: {str(e4)}")
-
-        print("\nAll transcript retrieval methods failed")
+        print("\nAll methods failed")
         return None
 
     except Exception as e:
-        print(f"\nCritical error in transcript retrieval: {str(e)}")
-        print(f"Error type: {type(e).__name__}")
-        if hasattr(e, '__traceback__'):
-            import traceback
-            print("Traceback:")
-            traceback.print_tb(e.__traceback__)
+        print(f"\nCritical error: {str(e)}")
         return None
     finally:
         print(f"\n{'='*50}\n")
@@ -833,25 +828,31 @@ def get_results():
             "message": str(e)
         })
 
-@app.route('/youtube/test_transcript/<video_id>')
-def test_transcript(video_id):
-    """Test endpoint for transcript retrieval with specific video"""
+@app.route('/youtube/test_fetch/<video_id>')
+def test_video_fetch(video_id):
+    """Test raw video page fetch"""
     try:
-        print(f"\nTesting transcript retrieval for video: {video_id}")
-        transcript = get_transcript(video_id)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(
+            f'https://www.youtube.com/watch?v={video_id}',
+            headers=headers
+        )
         
         return jsonify({
-            "status": "success" if transcript else "failed",
-            "has_transcript": bool(transcript),
-            "transcript_length": len(transcript) if transcript else 0,
-            "video_id": video_id
+            "status": "success",
+            "status_code": response.status_code,
+            "headers": dict(response.headers),
+            "content_preview": response.text[:500],
+            "content_length": len(response.text)
         })
+        
     except Exception as e:
         return jsonify({
             "status": "error",
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "video_id": video_id
+            "error": str(e)
         })
 
 @app.route('/youtube/test_known')
