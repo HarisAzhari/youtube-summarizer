@@ -20,19 +20,60 @@ CORS(app)
 
 # Configuration
 DB_PATH = 'youtube_crypto.db'
-API_KEY = 'AIzaSyBURNh4emPOxwY5Uvdj78oObc3HxByomn0'
+API_KEY = 'AIzaSyBajRLGNqaUpqTOk5ZzDCCk64LxqpAbpTU'
 
 # Combined channel list including Indonesian channels
 ALL_CHANNELS = [
-    # Original channels
-    '@CoinBureau', '@MeetKevin', 'UCQglaVhGOBI0BR5S6IJnQPg', '@AltcoinDaily',
-    '@CryptosRUs', '@elliotrades_official', '@DataDash', '@IvanOnTech',
-    '@TheCryptoLark', '@CryptoCasey', '@AnthonyPompliano', '@alessiorastani',
-    '@CryptoCapitalVenture', '@aantonop', '@Boxmining', '@CryptoZombie',
-    '@tonevays', '@ScottMelker', '@CTOLARSSON', '@Bankless', '@gemgemcrypto',
+    # English channels
+    '@CoinBureau',
+    '@MeetKevin',
+    'UCQglaVhGOBI0BR5S6IJnQPg',
+    '@AltcoinDaily',
+    '@CryptosRUs',
+    '@elliotrades_official',
+    '@DataDash',
+    '@IvanOnTech',
+    '@TheCryptoLark',
+    '@CryptoCasey',
+    '@AnthonyPompliano',
+    '@alessiorastani',
+    '@CryptoCapitalVenture',
+    '@aantonop',
+    '@Boxmining',
+    '@CryptoZombie',
+    '@tonevays',
+    '@ScottMelker',
+    '@CTOLARSSON',
+    '@Bankless',
+    '@gemgemcrypto',
+    '@DappUniversity',
+    '@EatTheBlocks',
+    '@MilkRoadDaily',
+    '@Coinsider',
+    '@InvestAnswers',
+    '@DigitalAssetNews',
+    '@CoinGecko',
+    '@CoinMarketCapOfficial',
+    '@MaxMaher',
+    '@when-shift-happens',
+    '@intothecryptoverse',
+    '@UnchainedCrypto',
+    '@RealVisionFinance',
+    '@Delphi_Digital',
+    'UCFEHdhuB_BEUHA_eL9cjqHA',
+    '@milesdeutscher1357',
+    '@TheDefiant',
+    '@CryptoBanterPlus',
+    '@CryptoBanterGroup',
+    
     # Indonesian channels
-    '@@AnggaAndinata', '@RepublikRupiahOfficial', '@AkademiCrypto',
-    '@felicia.tjiasaka', '@Coinvestasi', '@TimothyRonald', '@AndySenjaya',
+    '@AnggaAndinata',
+    '@RepublikRupiahOfficial',
+    '@AkademiCrypto',
+    '@felicia.tjiasaka',
+    '@Coinvestasi',
+    '@TimothyRonald',
+    '@AndySenjaya',
     '@leon.hartono'
 ]
 
@@ -59,7 +100,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=18, minute=30, second=0, microsecond=0)
+    next_run = now.replace(hour=15, minute=9, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -142,41 +183,33 @@ def get_caption_tracks(video_id, api_key):
         return []
 
 def get_transcript_v2(video_id, api_key):
-    """Get transcript using youtube_transcript_api with proxy support"""
-    from youtube_transcript_api import YouTubeTranscriptApi
-    import requests
-    
-    # Configure proxy
-    proxies = {
-        'http': 'http://127.0.0.1:8080',
-        'https': 'http://127.0.0.1:8080'
-    }
-    
-    # Configure the transcript API to use proxies
-    YouTubeTranscriptApi.proxies = proxies
-    
+    """Get transcript with support for Indonesian and English"""
     try:
+        print("\nFetching transcript...")
+        
+        # Get transcript list
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
-        # Try English or Indonesian
-        for lang in ['en', 'id']:
-            try:
-                transcript = transcript_list.find_transcript([lang])
-                transcript_data = transcript.fetch()
-                return " ".join(entry['text'] for entry in transcript_data)
-            except:
-                continue
-                
-        # If no English/Indonesian, try any transcript and translate
+        # Try to get English transcript first
         try:
-            transcript = transcript_list.find_manually_created_transcript()
-            if transcript.language_code not in ['en', 'id']:
-                transcript = transcript.translate('en')
-            transcript_data = transcript.fetch()
-            return " ".join(entry['text'] for entry in transcript_data)
+            transcript = transcript_list.find_transcript(['en'])
         except:
-            return None
-
+            # If no English transcript, try Indonesian and translate
+            try:
+                transcript = transcript_list.find_transcript(['id'])
+                transcript = transcript.translate('en')
+            except:
+                print("Could not find or translate any available transcripts")
+                return None
+        
+        # Get the actual transcript
+        transcript_data = transcript.fetch()
+        
+        # Sort and combine transcript
+        transcript_data.sort(key=lambda x: x['start'])
+        full_transcript = " ".join(entry['text'] for entry in transcript_data)
+        
+        return full_transcript.strip()
     except Exception as e:
         print(f"Error getting transcript: {str(e)}")
         return None
@@ -329,7 +362,7 @@ def check_recent_videos(playlist_id, api_key, channel_info):
     videos = []
     next_page_token = None
     now = datetime.now(pytz.UTC)
-    day_ago = now - timedelta(days=1)
+    day_ago = now - timedelta(days=37)
     
     while True:
         base_url = f"https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={playlist_id}&maxResults=50&key={api_key}"
@@ -917,6 +950,420 @@ def check_time():
             }
         })
     except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/youtube/coins')
+def get_unique_coins():
+    """Get list of all unique coins mentioned in analyses"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Simple query to get just unique coin names
+            c.execute('''
+                SELECT DISTINCT coin_mentioned
+                FROM coin_analysis 
+                ORDER BY coin_mentioned ASC
+            ''')
+            
+            coins = [row[0] for row in c.fetchall()]
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "coins": coins
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_unique_coins: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/clean-coins')
+def clean_coin_names():
+    """Analyze and suggest standardized coin names using Gemini AI without updating the database"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Get all unique coin names
+            c.execute('SELECT DISTINCT coin_mentioned FROM coin_analysis ORDER BY coin_mentioned')
+            coins = [row[0] for row in c.fetchall()]
+            
+            # Configure Gemini
+            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+            
+            # Process coins in batches to avoid token limits
+            batch_size = 50
+            all_suggestions = []
+            
+            for i in range(0, len(coins), batch_size):
+                batch = coins[i:i + batch_size]
+                coin_list = "\n".join(batch)
+                
+                prompt = """Clean and standardize these cryptocurrency names. Follow these rules:
+
+1. For each coin, provide the standardized name and original name
+2. Merge obvious duplicates (e.g., "Bitcoin", "BTC", "BITCOIN" should all map to "Bitcoin")
+3. Keep proper capitalization (e.g., "Bitcoin" not "BITCOIN")
+4. Remove redundant entries (e.g., "Bitcoin (BTC)" should just be "Bitcoin")
+5. Identify and merge variations (e.g., "Eth", "ETH", "Ethereum" should all be "Ethereum")
+6. For uncertain or unique entries, keep the original name
+7. Keep special project names or unique identifiers intact
+8. For AI-related coins, maintain their unique identifiers
+
+Return a valid JSON array where each item has this exact structure:
+{
+    "original": "the original coin name",
+    "standardized": "the cleaned coin name",
+    "reason": "explanation of why this standardization was chosen"
+}
+
+Clean these coin names:
+""" + coin_list
+
+                try:
+                    response = model.generate_content(prompt)
+                    clean_response = response.text.strip()
+                    
+                    # Remove JSON code block markers if present
+                    if clean_response.startswith('```json'):
+                        clean_response = clean_response[7:]
+                    elif clean_response.startswith('```'):
+                        clean_response = clean_response[3:]
+                    if clean_response.endswith('```'):
+                        clean_response = clean_response[:-3]
+                    
+                    # Parse the JSON response
+                    batch_suggestions = json.loads(clean_response.strip())
+                    all_suggestions.extend(batch_suggestions)
+                    
+                except Exception as e:
+                    print(f"Error processing batch: {str(e)}")
+                    print(f"Raw response: {clean_response}")
+                    continue
+            
+            # Process and organize the suggestions
+            if all_suggestions:
+                # Create summary of changes
+                changes_summary = {
+                    "total_original": len(coins),
+                    "total_standardized": len(set(s['standardized'] for s in all_suggestions)),
+                    "suggestions": all_suggestions,
+                    "major_groups": {}
+                }
+                
+                # Group similar coins
+                for suggestion in all_suggestions:
+                    std_name = suggestion['standardized']
+                    if std_name not in changes_summary['major_groups']:
+                        changes_summary['major_groups'][std_name] = []
+                    if suggestion['original'] != std_name:
+                        changes_summary['major_groups'][std_name].append(suggestion['original'])
+                
+                # Remove empty groups
+                changes_summary['major_groups'] = {k: v for k, v in changes_summary['major_groups'].items() if v}
+                
+                return jsonify({
+                    "status": "success",
+                    "data": changes_summary
+                })
+            
+            return jsonify({
+                "status": "error",
+                "message": "No cleaning suggestions were generated"
+            }), 400
+            
+    except Exception as e:
+        print(f"Error in clean_coin_names: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/test/new-reason/<video_id>')
+def analyze_mentions_type(video_id):
+    """Analyze mentions with standardized format and project/protocol distinction"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Get mentions and transcript for this video
+            c.execute('''
+                SELECT v.transcript, ca.coin_mentioned
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE v.video_id = ?
+            ''', (video_id,))
+            
+            results = c.fetchall()
+            if not results:
+                return jsonify({
+                    "status": "error",
+                    "message": "No data found for this video ID"
+                }), 404
+            
+            transcript = results[0][0]  # Get transcript from first row
+            mentions = list(set(row[1] for row in results))  # Get unique mentions
+            
+            # Configure Gemini
+            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+            
+            prompt = f"""Analyze the given text and extract information about cryptocurrencies mentioned. Follow these rules EXACTLY:
+
+CLASSIFICATION RULES:
+1. Distinguish between:
+   - COINS: Actual cryptocurrencies with their own token/coin
+   - PROTOCOLS: Blockchain infrastructure or DeFi platforms
+   - PROJECTS: Blockchain applications, services, or AI projects
+   - NETWORKS: Layer-1 blockchains
+2. Add a "type" field to indicate if it's a "COIN", "PROTOCOL", "PROJECT", or "NETWORK"
+3. NFT collections should be marked as PROJECTS
+4. AI projects without tokens should be marked as PROJECTS
+5. Layer-1 blockchains with native tokens should be marked as both NETWORK and COIN
+
+RULES FOR ANALYSIS:
+1. Each coin should be analyzed independently
+2. For each coin:
+   - List ONLY reasons specifically about that coin
+   - The indicator field must ONLY describe that specific coin's outlook
+   - Keep indicator field to 5 words maximum
+   - Do NOT mention other coins in the indicator field
+
+INDICATOR GUIDELINES:
+- Use ONLY these formats:
+  * "Bullish, or [with specific condition]"
+  * "Bearish or [with specific condition]"
+
+REASONS GUIDELINES:
+- Each reason must be:
+  * About ONLY the specific coin being analyzed
+  * A detailed reasons with reasonable example(if there's any from the text)
+  * Self-contained (no references to "it" or "this")
+  * Not mentioning other coins' influences
+
+Format your response EXACTLY like this example:
+[
+    {{
+        "coin_mentioned": "CoinA",
+        "type": "COIN/PROTOCOL/PROJECT/NETWORK",
+        "reason": [
+            "Direct reason about CoinA only",
+            "Another specific reason about CoinA",
+            "Third reason focusing on CoinA"
+        ],
+        "indicator": "Bullish [if there's specific condition, state it]"
+    }}
+]
+
+IMPORTANT:
+- Output ONLY valid JSON
+- No text before or after the JSON
+- Each coin's analysis must be completely independent
+- Never mention relationships between coins in the indicator field
+- Do not ever miss any point especially if they explain in points
+
+Analyze this text:
+{transcript}"""
+
+            try:
+                response = model.generate_content(prompt)
+                clean_response = response.text.strip()
+                
+                # Remove JSON code block markers if present
+                if clean_response.startswith('```json'):
+                    clean_response = clean_response[7:]
+                elif clean_response.startswith('```'):
+                    clean_response = clean_response[3:]
+                if clean_response.endswith('```'):
+                    clean_response = clean_response[:-3]
+                
+                # Parse the JSON response
+                analysis = json.loads(clean_response.strip())
+                
+                # Create summary statistics
+                type_counts = {}
+                for item in analysis:
+                    item_type = item.get('type', 'UNKNOWN')
+                    if item_type not in type_counts:
+                        type_counts[item_type] = 0
+                    type_counts[item_type] += 1
+                
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "video_id": video_id,
+                        "total_mentions": len(mentions),
+                        "type_distribution": type_counts,
+                        "analysis": analysis
+                    }
+                })
+                
+            except Exception as e:
+                print(f"Error processing analysis: {str(e)}")
+                print(f"Raw response: {clean_response}")
+                return jsonify({
+                    "status": "error",
+                    "message": f"Error processing analysis: {str(e)}"
+                }), 500
+            
+    except Exception as e:
+        print(f"Error in analyze_mentions_type: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/test/channel/<channel_handle>')
+def test_channel(channel_handle):
+    """Test endpoint to get recent video information for a specific channel"""
+    try:
+        # Clean up handle if needed
+        if not channel_handle.startswith('@'):
+            channel_handle = f'@{channel_handle}'
+            
+        # Get channel info
+        channel_info = get_channel_id_by_handle(channel_handle, API_KEY)
+        if not channel_info:
+            return jsonify({
+                "status": "error",
+                "message": f"Could not find channel information for {channel_handle}"
+            }), 404
+            
+        # Get playlist ID
+        playlist_id = get_uploads_playlist_id(channel_info['channelId'], API_KEY)
+        if not playlist_id:
+            return jsonify({
+                "status": "error",
+                "message": f"Could not get uploads playlist for {channel_handle}"
+            }), 404
+            
+        # Get recent videos (using existing function but modified for this endpoint)
+        url = f"https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={playlist_id}&maxResults=5&key={API_KEY}"
+        
+        response = requests.get(url)
+        data = response.json()
+        
+        if 'items' not in data:
+            return jsonify({
+                "status": "error",
+                "message": "No videos found"
+            }), 404
+            
+        # Process video information
+        videos = []
+        for video in data['items']:
+            video_info = {
+                'title': video['snippet']['title'],
+                'video_id': video['snippet']['resourceId']['videoId'],
+                'published_at': video['snippet']['publishedAt'],
+                'channel_name': channel_info['channelName'],
+                'video_url': f"https://youtube.com/watch?v={video['snippet']['resourceId']['videoId']}"
+            }
+            videos.append(video_info)
+            
+        return jsonify({
+            "status": "success",
+            "data": {
+                "channel_name": channel_info['channelName'],
+                "channel_id": channel_info['channelId'],
+                "recent_videos": videos
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/youtube/get-light')
+def get_light_results():
+    """Get all results without transcripts for lighter payload"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get all videos except transcript field
+            c.execute('''
+                SELECT 
+                    id, video_id, channel_id, channel_name, 
+                    title, url, thumbnail_url, views, 
+                    duration, published_at, processed_at
+                FROM videos 
+                ORDER BY processed_at DESC
+            ''')
+            videos = [dict(row) for row in c.fetchall()]
+            
+            # Get analyses for each video
+            for video in videos:
+                c.execute('''
+                    SELECT 
+                        coin_mentioned, reasons, indicator
+                    FROM coin_analysis 
+                    WHERE video_id = ?
+                ''', (video['video_id'],))
+                
+                analyses = []
+                for row in c.fetchall():
+                    analyses.append({
+                        'coin_mentioned': row['coin_mentioned'],
+                        'reason': json.loads(row['reasons']),  # Parse JSON reasons back into array
+                        'indicator': row['indicator']
+                    })
+                video['analyses'] = analyses
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "total_videos": len(videos),
+                    "videos": videos
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_light_results: {str(e)}")  # Debug print
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+# Optional: Add a new endpoint to get a single video's transcript if needed
+@app.route('/youtube/transcript/<video_id>')
+def get_video_transcript(video_id):
+    """Get transcript for a specific video"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            c.execute('SELECT transcript FROM videos WHERE video_id = ?', (video_id,))
+            result = c.fetchone()
+            
+            if result:
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "video_id": video_id,
+                        "transcript": result[0]
+                    }
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Video not found"
+                }), 404
+                
+    except Exception as e:
+        print(f"Error getting transcript: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
