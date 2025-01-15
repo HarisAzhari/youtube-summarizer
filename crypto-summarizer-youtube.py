@@ -28,7 +28,7 @@ from statsmodels.tsa.arima.model import ARIMA
 from enum import Enum
 import logging
 import os
-from typing import List, Optional
+from typing import List, Optional,Dict, Any
 
 app = Flask(__name__)
 CORS(app)
@@ -1890,15 +1890,10 @@ def get_todays_channels():
             "message": str(e)
         }), 500
     
-#Future Improvement Features
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app)
-
-# Enums for validation
 class ModelType(str, Enum):
     lstm = "lstm"
     nn = "nn"
@@ -1912,199 +1907,219 @@ class CoinType(str, Enum):
     bnb = "bnb"
     sol = "sol"
 
-# Model configurations
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATHS = {
-    ModelType.lstm: {
-        'model': os.path.join(BASE_DIR, 'LSTM_price_prediction.keras'),
-        'scaler': os.path.join(BASE_DIR, 'LSTM_price_scaler.pkl')
-    },
-    ModelType.nn: {
-        'model': os.path.join(BASE_DIR, 'NN_price_prediction.keras'),
-        'scaler': os.path.join(BASE_DIR, 'NN_price_scaler.pkl')
-    },
-    ModelType.gru: {
-        'model': os.path.join(BASE_DIR, 'gru_model.h5'),
-        'scaler': None
-    },
-    ModelType.arima: {
-        'model': os.path.join(BASE_DIR, 'ARIMA_price_prediction.pkl'),
-        'scaler': None
-    }
+# Mapping for cryptocurrency symbols
+COIN_SYMBOLS = {
+    CoinType.btc: "BTC-USD",
+    CoinType.eth: "ETH-USD",
+    CoinType.xrp: "XRP-USD",
+    CoinType.bnb: "BNB-USD",
+    CoinType.sol: "SOL-USD"
 }
 
-class PricePoint:
-    def __init__(self, date: str, actual_price: Optional[float], predicted_price: float):
-        self.date = date
-        self.actual_price = actual_price
-        self.predicted_price = predicted_price
-    
-    def to_dict(self):
-        return {
-            "date": self.date,
-            "actual_price": self.actual_price,
-            "predicted_price": self.predicted_price
+class PricePrediction:
+    def __init__(self, base_dir: str):
+        self.base_dir = base_dir
+        self.model_paths = {
+            ModelType.lstm: {
+                'model': os.path.join(base_dir, 'LSTM_price_prediction.keras'),
+                'scaler': os.path.join(base_dir, 'LSTM_price_scaler.pkl')
+            },
+            ModelType.nn: {
+                'model': os.path.join(base_dir, 'NN_price_prediction.keras'),
+                'scaler': os.path.join(base_dir, 'NN_price_scaler.pkl')
+            },
+            ModelType.gru: {
+                'model': os.path.join(base_dir, 'gru_model.h5'),
+                'scaler': None
+            },
+            ModelType.arima: {
+                'model': os.path.join(base_dir, 'ARIMA_price_prediction.pkl'),
+                'scaler': None
+            }
         }
-
-def predict_deep_learning(model, data, scaler, prediction_days=60, future_days=30):
-    """Helper function for deep learning models (LSTM, NN, GRU)"""
-    try:
-        logger.debug("Starting deep learning prediction")
-        scaled_data = scaler.fit_transform(data['Close'].values.reshape(-1,1))
         
-        # Prepare test data
-        test_start = dt.datetime(2020,1,1)
-        test_end = dt.datetime.now() + dt.timedelta(days=prediction_days)
-        test_data = yf.download(f"{data.index.name}-USD", start=test_start, end=test_end)
-        actual_prices = test_data['Close'].values
-        
-        total_dataset = pd.concat((data['Close'], test_data['Close']), axis=0)
-        model_inputs = total_dataset[len(total_dataset) - len(test_data) - prediction_days:].values
-        model_inputs = model_inputs.reshape(-1, 1)
-        model_inputs = scaler.transform(model_inputs)
-
-        # Prepare test sequences for historical predictions
-        x_test = []
-        for x in range(prediction_days, len(model_inputs)):
-            x_test.append(model_inputs[x-prediction_days:x, 0])
-        x_test = np.array(x_test)
-        x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
-
-        # Make historical predictions
-        prediction_prices = model.predict(x_test)
-        prediction_prices = scaler.inverse_transform(prediction_prices)
-
-        # Calculate future predictions
-        future_predictions = []
-        last_sequence = model_inputs[-prediction_days:]
-
-        for _ in range(future_days):
-            current_sequence = last_sequence.reshape((1, prediction_days, 1))
-            next_pred = model.predict(current_sequence, verbose=0)
-            next_pred = scaler.inverse_transform(next_pred)[0][0]
-            future_predictions.append(float(next_pred))
-            last_sequence = np.roll(last_sequence, -1)
-            last_sequence[-1] = scaler.transform([[next_pred]])[0][0]
+    def load_crypto_data(self, coin: str, start_date: dt.datetime, end_date: dt.datetime) -> pd.DataFrame:
+        """Load cryptocurrency data with proper error handling"""
+        try:
+            symbol = COIN_SYMBOLS.get(CoinType(coin))
+            if not symbol:
+                raise ValueError(f"Invalid coin type: {coin}")
             
-        return test_data.index, actual_prices, prediction_prices, future_predictions
+            data = yf.download(symbol, start=start_date, end=end_date)
+            if data.empty:
+                raise ValueError(f"No data available for {symbol}")
+            
+            return data
+        except Exception as e:
+            logger.error(f"Error loading data for {coin}: {str(e)}")
+            raise
 
-    except Exception as e:
-        logger.error(f"Error in deep learning prediction: {str(e)}")
-        raise
+    def prepare_sequences(self, data: np.ndarray, sequence_length: int) -> np.ndarray:
+        """Prepare sequences for deep learning models"""
+        sequences = []
+        for i in range(sequence_length, len(data)):
+            sequences.append(data[i-sequence_length:i])
+        return np.array(sequences)
 
-@app.route("/predict/<model_type>/<coin>")
-def predict(model_type: str, coin: str):
-    """Predict cryptocurrency prices"""
+    def predict_deep_learning(
+        self, 
+        model_type: ModelType, 
+        data: pd.DataFrame, 
+        prediction_days: int = 60, 
+        future_days: int = 30
+    ) -> Dict[str, Any]:
+        """Enhanced deep learning prediction with proper error handling"""
+        try:
+            # Load model and scaler
+            model = load_model(self.model_paths[model_type]['model'])
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            
+            # Scale the data
+            scaled_data = scaler.fit_transform(data['Close'].values.reshape(-1, 1))
+            
+            # Prepare sequences
+            x_test = self.prepare_sequences(scaled_data, prediction_days)
+            x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
+            
+            # Make predictions
+            predictions = model.predict(x_test)
+            predictions = scaler.inverse_transform(predictions)
+            
+            # Generate future predictions
+            future_predictions = []
+            last_sequence = scaled_data[-prediction_days:]
+            
+            for _ in range(future_days):
+                next_pred = model.predict(
+                    last_sequence.reshape(1, prediction_days, 1), 
+                    verbose=0
+                )
+                next_pred = scaler.inverse_transform(next_pred)[0][0]
+                future_predictions.append(float(next_pred))
+                last_sequence = np.roll(last_sequence, -1)
+                last_sequence[-1] = scaler.transform([[next_pred]])[0][0]
+            
+            return {
+                'historical_predictions': predictions.flatten(),
+                'future_predictions': future_predictions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in deep learning prediction: {str(e)}")
+            raise
+
+    def predict_arima(
+        self, 
+        data: pd.DataFrame, 
+        prediction_days: int = 60, 
+        future_days: int = 30
+    ) -> Dict[str, Any]:
+        """ARIMA prediction with proper error handling"""
+        try:
+            # Load ARIMA model
+            with open(self.model_paths[ModelType.arima]['model'], 'rb') as file:
+                arima_model = pickle.load(file)
+            
+            # Fit model with current data
+            model = ARIMA(data['Close'], order=arima_model.order)
+            fitted_model = model.fit()
+            
+            # Generate predictions
+            historical_predictions = fitted_model.predict(
+                start=len(data)-prediction_days,
+                end=len(data)-1
+            )
+            future_predictions = fitted_model.forecast(steps=future_days).tolist()
+            
+            return {
+                'historical_predictions': historical_predictions,
+                'future_predictions': future_predictions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in ARIMA prediction: {str(e)}")
+            raise
+
+    def format_predictions(
+        self,
+        dates: pd.DatetimeIndex,
+        actual_prices: np.ndarray,
+        predictions: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Format predictions into a consistent response structure"""
+        result = []
+        
+        # Format historical predictions
+        for date, actual, pred in zip(
+            dates[-len(predictions['historical_predictions']):],
+            actual_prices[-len(predictions['historical_predictions']):],
+            predictions['historical_predictions']
+        ):
+            result.append({
+                "date": date.strftime('%Y-%m-%d'),
+                "actual_price": float(actual),
+                "predicted_price": float(pred)
+            })
+        
+        # Add future predictions
+        future_dates = pd.date_range(
+            start=dates[-1] + pd.Timedelta(days=1),
+            periods=len(predictions['future_predictions'])
+        )
+        
+        for date, pred in zip(future_dates, predictions['future_predictions']):
+            result.append({
+                "date": date.strftime('%Y-%m-%d'),
+                "actual_price": None,
+                "predicted_price": float(pred)
+            })
+        
+        return result
+
+def predict_endpoint(model_type: str, coin: str) -> Dict[str, Any]:
+    """Enhanced prediction endpoint with proper validation and error handling"""
     try:
-        # Validate model_type and coin
+        # Validate input parameters
         if model_type not in [m.value for m in ModelType]:
             return jsonify({"error": f"Invalid model type: {model_type}"}), 400
         if coin not in [c.value for c in CoinType]:
             return jsonify({"error": f"Invalid coin type: {coin}"}), 400
-
+        
         logger.info(f"Starting prediction for {coin} using {model_type} model")
         
-        # Load cryptocurrency data
-        start = dt.datetime(2016,1,1)
-        end = dt.datetime.now()
-        ticker = f"{coin.upper()}-USD"
-        data = yf.download(ticker, start=start, end=end)
+        # Initialize prediction class
+        predictor = PricePrediction(os.path.dirname(os.path.abspath(__file__)))
         
-        if data.empty:
-            return jsonify({"error": f"No data available for {ticker}"}), 400
-            
-        data.index.name = coin.upper()
-
-        result_array = []
-
-        # Load model and make predictions
+        # Load data
+        start_date = dt.datetime(2016, 1, 1)
+        end_date = dt.datetime.now()
+        data = predictor.load_crypto_data(coin, start_date, end_date)
+        
+        # Make predictions based on model type
         if model_type == ModelType.arima.value:
-            with open(MODEL_PATHS[ModelType.arima]['model'], 'rb') as file:
-                loaded_model = pickle.load(file)
-            
-            # Prepare test data for ARIMA
-            test_start = dt.datetime(2020,1,1)
-            test_end = dt.datetime.now()
-            test_data = yf.download(ticker, start=test_start, end=test_end)
-            
-            model = ARIMA(data['Close'], order=loaded_model.order)
-            fitted_model = model.fit()
-            
-            # Historical predictions
-            prediction_prices = fitted_model.predict(start=len(data)-len(test_data), end=len(data)-1)
-            future_predictions = fitted_model.forecast(steps=30).tolist()
-            
-            # Create response data
-            for date, actual, predicted in zip(test_data.index, test_data['Close'], prediction_prices):
-                result_array.append(PricePoint(
-                    date=date.strftime('%Y-%m-%d'),
-                    actual_price=float(actual),
-                    predicted_price=float(predicted)
-                ).to_dict())
-                
-            # Add future predictions
-            future_dates = pd.date_range(start=test_data.index[-1], periods=31)[1:]
-            for date, predicted in zip(future_dates, future_predictions):
-                result_array.append(PricePoint(
-                    date=date.strftime('%Y-%m-%d'),
-                    actual_price=None,
-                    predicted_price=float(predicted)
-                ).to_dict())
-                
+            predictions = predictor.predict_arima(data)
         else:
-            model = load_model(MODEL_PATHS[ModelType(model_type)]['model'])
-            scaler = MinMaxScaler(feature_range=(0,1))
-            
-            # Get predictions from deep learning model
-            historical_dates, actual_prices, prediction_prices, future_predictions = predict_deep_learning(
-                model, data, scaler
-            )
-            
-            # Create response data for historical predictions
-            for date, actual, predicted in zip(historical_dates, actual_prices, prediction_prices.flatten()):
-                result_array.append(PricePoint(
-                    date=date.strftime('%Y-%m-%d'),
-                    actual_price=float(actual),
-                    predicted_price=float(predicted)
-                ).to_dict())
-                
-            # Add future predictions
-            future_dates = pd.date_range(start=historical_dates[-1], periods=31)[1:]
-            for date, predicted in zip(future_dates, future_predictions):
-                result_array.append(PricePoint(
-                    date=date.strftime('%Y-%m-%d'),
-                    actual_price=None,
-                    predicted_price=float(predicted)
-                ).to_dict())
+            predictions = predictor.predict_deep_learning(ModelType(model_type), data)
+        
+        # Format results
+        result = predictor.format_predictions(
+            data.index,
+            data['Close'].values,
+            predictions
+        )
         
         logger.info(f"Successfully generated predictions for {coin}")
-        return jsonify(result_array)
+        return jsonify(result)
     
     except Exception as e:
         logger.error(f"Error during prediction: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@app.route("/health")
-def health_check():
-    """Health check endpoint that also verifies model files"""
-    try:
-        # Check if all model files exist
-        for model_type, paths in MODEL_PATHS.items():
-            if not os.path.exists(paths['model']):
-                return jsonify({
-                    "status": "unhealthy",
-                    "error": f"Missing model file for {model_type}: {paths['model']}"
-                }), 500
-            if paths['scaler'] and not os.path.exists(paths['scaler']):
-                return jsonify({
-                    "status": "unhealthy",
-                    "error": f"Missing scaler file for {model_type}: {paths['scaler']}"
-                }), 500
-        
-        return jsonify({"status": "healthy"})
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return jsonify({"status": "unhealthy", "error": str(e)}), 500
+# Flask route implementation
+@app.route("/predict/<model_type>/<coin>")
+def predict(model_type: str, coin: str):
+    return predict_endpoint(model_type, coin)
+
     
 if __name__ == '__main__':
     init_db()
