@@ -1,5 +1,5 @@
 # All imports remain the same
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from datetime import datetime, timedelta
 import threading
 from pathlib import Path
@@ -14,13 +14,28 @@ import json
 from flask_cors import CORS
 import sqlite3
 import sys
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import yfinance as yf
+import numpy as np
+import pandas as pd
+import datetime as dt
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import load_model
+import joblib
+import pickle
+from statsmodels.tsa.arima.model import ARIMA
+from enum import Enum
+import logging
+import os
+from typing import List, Optional
 
 app = Flask(__name__)
 CORS(app)
 
 # Configuration
 DB_PATH = 'youtube_crypto.db'
-API_KEY = 'AIzaSyBajRLGNqaUpqTOk5ZzDCCk64LxqpAbpTU'
+API_KEY = 'AIzaSyCwVHt2_T0A3N39voVCCAieDgg0PctOSCs'
 
 # Combined channel list including Indonesian channels
 ALL_CHANNELS = [
@@ -100,7 +115,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=15, minute=9, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=53, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -142,7 +157,7 @@ def init_db():
             )
         ''')
         
-        # Coin analysis table - REMOVE THE DROP TABLE!
+        # Coin analysis table
         c.execute('''
             CREATE TABLE IF NOT EXISTS coin_analysis (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,6 +178,26 @@ def init_db():
                 status TEXT NOT NULL,
                 message TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Coin edits table (new)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS coin_edits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                current_name TEXT NOT NULL,
+                new_name TEXT NOT NULL,
+                edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Video edits table (new)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS video_edits (
+                edit_id INTEGER,
+                video_id TEXT NOT NULL,
+                FOREIGN KEY (edit_id) REFERENCES coin_edits(id),
+                FOREIGN KEY (video_id) REFERENCES videos(video_id)
             )
         ''')
 
@@ -1090,7 +1125,7 @@ Clean these coin names:
     
 @app.route('/test/new-reason/<video_id>')
 def analyze_mentions_type(video_id):
-    """Analyze mentions with standardized format and project/protocol distinction"""
+    """Analyze mentions with standardized format, project/protocol distinction, and source information"""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             c = conn.cursor()
@@ -1115,7 +1150,7 @@ def analyze_mentions_type(video_id):
             
             # Configure Gemini
             genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
-            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
             prompt = f"""Analyze the given text and extract information about cryptocurrencies mentioned. Follow these rules EXACTLY:
 
@@ -1129,11 +1164,14 @@ CLASSIFICATION RULES:
 3. NFT collections should be marked as PROJECTS
 4. AI projects without tokens should be marked as PROJECTS
 5. Layer-1 blockchains with native tokens should be marked as both NETWORK and COIN
+6. IT IS A MUST THAT YOU PROVIDE SOURCE BASED ON WHAT THE TRNASCRIPT STATED WHETHER FROM WEBSITE, ARTICLE, ETC
 
 RULES FOR ANALYSIS:
 1. Each coin should be analyzed independently
 2. For each coin:
    - List ONLY reasons specifically about that coin
+   - For each reason, MUST include specific quotes or examples from the transcript IF AVAILABLE
+   - Include source information when mentioned (e.g., data sources, experts, organizations)
    - The indicator field must ONLY describe that specific coin's outlook
    - Keep indicator field to 5 words maximum
    - Do NOT mention other coins in the indicator field
@@ -1143,10 +1181,12 @@ INDICATOR GUIDELINES:
   * "Bullish, or [with specific condition]"
   * "Bearish or [with specific condition]"
 
-REASONS GUIDELINES:
+REASONS AND SOURCES GUIDELINES:
 - Each reason must be:
   * About ONLY the specific coin being analyzed
-  * A detailed reasons with reasonable example(if there's any from the text)
+  * Include DIRECT QUOTES from the transcript when available
+  * Include any mentioned sources (e.g., "According to CoinGecko...", "Data from Glassnode shows...")
+  * Include specific examples and data points mentioned
   * Self-contained (no references to "it" or "this")
   * Not mentioning other coins' influences
 
@@ -1156,9 +1196,9 @@ Format your response EXACTLY like this example:
         "coin_mentioned": "CoinA",
         "type": "COIN/PROTOCOL/PROJECT/NETWORK",
         "reason": [
-            "Direct reason about CoinA only",
-            "Another specific reason about CoinA",
-            "Third reason focusing on CoinA"
+            "According to Glassnode data mentioned in the video, CoinA saw a 25% increase in active addresses",
+            "The host cites CoinMetrics report showing 'CoinA's transaction volume reached $5B in December'",
+            "Direct quote from transcript: 'Our analysis shows CoinA's mining hashrate has doubled'"
         ],
         "indicator": "Bullish [if there's specific condition, state it]"
     }}
@@ -1169,7 +1209,9 @@ IMPORTANT:
 - No text before or after the JSON
 - Each coin's analysis must be completely independent
 - Never mention relationships between coins in the indicator field
-- Do not ever miss any point especially if they explain in points
+- ALWAYS include direct quotes and sources when they appear in the transcript
+- When data or statistics are mentioned, include them with their source
+- If specific experts, organizations, or tools are cited, include them
 
 Analyze this text:
 {transcript}"""
@@ -1368,6 +1410,701 @@ def get_video_transcript(video_id):
             "status": "error",
             "message": str(e)
         }), 500
+
+from flask import request, jsonify
+
+from flask import request, jsonify
+
+@app.route('/youtube/override-coin', methods=['POST'])
+def override_coin_name():
+    """Override a coin name and automatically find affected videos"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['current_name', 'new_name']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Missing required field: {field}"
+                }), 400
+
+        current_name = data['current_name']
+        new_name = data['new_name']
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # First find all affected videos with their details
+            c.execute('''
+                SELECT DISTINCT 
+                    v.video_id,
+                    v.title,
+                    v.channel_name,
+                    v.url
+                FROM coin_analysis ca
+                JOIN videos v ON ca.video_id = v.video_id
+                WHERE ca.coin_mentioned = ?
+            ''', (current_name,))
+            
+            affected_videos = [dict(row) for row in c.fetchall()]
+            
+            if not affected_videos:
+                return jsonify({
+                    "status": "error",
+                    "message": f"No videos found with coin name: {current_name}"
+                }), 404
+            
+            # Insert the edit record
+            c.execute('''
+                INSERT INTO coin_edits (current_name, new_name)
+                VALUES (?, ?)
+            ''', (current_name, new_name))
+            
+            edit_id = c.lastrowid
+            
+            # Update coin names in all affected videos
+            c.execute('''
+                UPDATE coin_analysis 
+                SET coin_mentioned = ?
+                WHERE coin_mentioned = ?
+            ''', (new_name, current_name))
+            
+            # Record all affected videos
+            for video in affected_videos:
+                c.execute('''
+                    INSERT INTO video_edits (edit_id, video_id)
+                    VALUES (?, ?)
+                ''', (edit_id, video['video_id']))
+
+            # Get the timestamp of the edit
+            c.execute('SELECT edited_at FROM coin_edits WHERE id = ?', (edit_id,))
+            timestamp = c.fetchone()[0]
+
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "current_name": current_name,
+                    "new_name": new_name,
+                    "timestamp": timestamp,
+                    "videos_affected": len(affected_videos),
+                    "videos": [{
+                        "video_id": video["video_id"],
+                        "title": video["title"],
+                        "channel": video["channel_name"],
+                        "url": video["url"]
+                    } for video in affected_videos]
+                }
+            })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/edit-history')
+def get_edit_history():
+    """Get the simplified history of all coin name edits"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get all edits with simplified format
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name,
+                    strftime('%H:%M:%S', edited_at) as timestamp
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            
+            edits = [dict(row) for row in c.fetchall()]
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "log": edits
+                }
+            })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/affected-videos/<edit_id>')
+def get_affected_videos(edit_id):
+    """Get list of videos affected by a specific edit"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT 
+                    v.video_id,
+                    v.title,
+                    v.channel_name
+                FROM video_edits ve
+                JOIN videos v ON ve.video_id = v.video_id
+                WHERE ve.edit_id = ?
+            ''', (edit_id,))
+            
+            videos = [dict(row) for row in c.fetchall()]
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "videos_affected": videos
+                }
+            })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/youtube/daily-summary', methods=['POST'])
+def generate_daily_summary():
+    """Generate structured summary of cryptocurrency analysis for specific coins"""
+    try:
+        data = request.get_json()
+        
+        if 'date' not in data:
+            return jsonify({
+                "status": "error",
+                "message": "Missing required field: date"
+            }), 400
+
+        target_date = data['date']
+        # Define our target coins
+        target_coins = ["Bitcoin", "Ethereum (ETH)", "XRP"]
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get all analyses for the specific date
+            c.execute('''
+                SELECT 
+                    v.video_id,
+                    v.title,
+                    v.channel_name,
+                    v.url,
+                    v.processed_at,
+                    ca.coin_mentioned,
+                    ca.reasons,
+                    ca.indicator
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE DATE(v.processed_at) = DATE(?)
+                ORDER BY v.processed_at ASC
+            ''', (target_date,))
+            
+            analyses = [dict(row) for row in c.fetchall()]
+            
+            if not analyses:
+                return jsonify({
+                    "status": "error",
+                    "message": f"No analyses found for {target_date}"
+                }), 404
+
+            # Organize data by coin
+            coin_data = {coin: [] for coin in target_coins}
+            
+            for analysis in analyses:
+                # Normalize coin names for matching
+                current_coin = analysis['coin_mentioned'].strip()
+                matched_coin = None
+                
+                # Manual matching logic
+                if any(name.lower() in current_coin.lower() for name in ["bitcoin", "btc"]):
+                    matched_coin = "Bitcoin"
+                elif any(name.lower() in current_coin.lower() for name in ["ethereum", "eth"]):
+                    matched_coin = "Ethereum (ETH)"
+                elif any(name.lower() in current_coin.lower() for name in ["xrp", "ripple"]):
+                    matched_coin = "XRP"
+                
+                if matched_coin in target_coins:
+                    coin_data[matched_coin].append({
+                        "indicator": analysis['indicator'],
+                        "reasons": json.loads(analysis['reasons']),
+                        "source": {
+                            "channel": analysis['channel_name'],
+                            "title": analysis['title'],
+                            "url": analysis['url']
+                        }
+                    })
+
+            # Configure Gemini for summary generation
+            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+            
+            # Prepare detailed analysis for each coin
+            coin_summaries = {}
+            
+            for coin in target_coins:
+                if not coin_data[coin]:
+                    continue
+                    
+                coin_prompt = f"""Analyze this {coin} data and create a structured summary:
+
+{json.dumps(coin_data[coin], indent=2)}
+
+Provide analysis in this EXACT format:
+{{
+    "overall_sentiment": "Brief 1-2 sentence overview of general sentiment",
+    "bullish_points": [
+        "Clear, specific bullish points with source citations in parentheses",
+        "Each point should be a complete, detailed thought"
+    ],
+    "bearish_points": [
+        "Clear, specific bearish points with source citations in parentheses",
+        "Each point should be a complete, detailed thought"
+    ],
+    "key_metrics": [
+        "Any specific numbers, statistics, or data points mentioned",
+        "Include source and specific values"
+    ],
+    "channels_mentioned": [
+        "List of unique channels discussing this coin"
+    ]
+}}
+
+Rules:
+1. Each point must be specific and detailed
+2. Include source citations in parentheses
+3. Separate truly bullish and bearish points
+4. Focus on factual statements and data
+5. Include specific numbers when available"""
+
+                try:
+                    response = model.generate_content(coin_prompt)
+                    clean_response = response.text.strip()
+                    
+                    # Remove JSON code block markers if present
+                    if clean_response.startswith('```json'):
+                        clean_response = clean_response[7:]
+                    if clean_response.startswith('```'):
+                        clean_response = clean_response[3:]
+                    if clean_response.endswith('```'):
+                        clean_response = clean_response[:-3]
+                    
+                    # Additional cleanup for potential JSON issues
+                    clean_response = clean_response.strip()
+                    
+                    try:
+                        parsed_response = json.loads(clean_response)
+                        coin_summaries[coin] = parsed_response
+                    except json.JSONDecodeError as je:
+                        print(f"JSON parsing error for {coin}: {str(je)}")
+                        print(f"Raw response: {clean_response}")
+                        
+                        # Attempt to fix common JSON issues
+                        clean_response = clean_response.replace('\n', ' ').replace('\r', '')
+                        clean_response = clean_response.replace('""', '"')
+                        
+                        try:
+                            parsed_response = json.loads(clean_response)
+                            coin_summaries[coin] = parsed_response
+                        except:
+                            # If still failing, provide structured error response
+                            coin_summaries[coin] = {
+                                "overall_sentiment": "Error processing analysis",
+                                "bullish_points": [],
+                                "bearish_points": [],
+                                "key_metrics": [],
+                                "channels_mentioned": [],
+                                "error": "Failed to parse analysis response"
+                            }
+                            
+                except Exception as e:
+                    print(f"Error processing {coin}: {str(e)}")
+                    coin_summaries[coin] = {
+                        "overall_sentiment": "Error processing analysis",
+                        "bullish_points": [],
+                        "bearish_points": [],
+                        "key_metrics": [],
+                        "channels_mentioned": [],
+                        "error": f"Failed to generate analysis: {str(e)}"
+                    }
+
+            # Generate overall market summary
+            overall_prompt = """Create a brief overall market summary based on the coin-specific analyses:
+
+{}
+
+Provide a few key points about:
+1. General market sentiment
+2. Notable patterns across coins
+3. Significant developments affecting multiple coins
+4. Key disagreements or contrasting views
+
+Keep it concise and fact-based.""".format(json.dumps(coin_summaries, indent=2))
+
+            try:
+                response = model.generate_content(overall_prompt)
+                market_summary = response.text.strip()
+            except Exception as e:
+                market_summary = f"Error generating market summary: {str(e)}"
+
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": target_date,
+                    "metrics": {
+                        "videos_analyzed": len(set(a['video_id'] for a in analyses)),
+                        "total_mentions": {
+                            coin: len(mentions) for coin, mentions in coin_data.items() if mentions
+                        }
+                    },
+                    "market_summary": market_summary,
+                    "coin_analysis": coin_summaries
+                }
+            })
+
+    except Exception as e:
+        print(f"Error in generate_daily_summary: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/youtube/today-channels')
+def get_todays_channels():
+    """Get channels that have uploaded videos today with their video details"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get current date in Malaysia timezone
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            current_date = datetime.now(malaysia_tz).strftime("%Y-%m-%d")
+            
+            # Modified query to use published_at date and Malaysia timezone
+            c.execute('''
+                WITH video_data AS (
+                    SELECT 
+                        v.channel_name,
+                        v.channel_id,
+                        v.video_id,
+                        v.title,
+                        v.url,
+                        v.thumbnail_url,
+                        v.views,
+                        v.published_at,
+                        COALESCE(
+                            (SELECT COUNT(*) 
+                             FROM coin_analysis ca2 
+                             WHERE ca2.video_id = v.video_id),
+                            0
+                        ) as coin_count
+                    FROM videos v
+                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
+                    WHERE DATE(v.published_at) = ?
+                    GROUP BY v.video_id
+                )
+                SELECT * FROM video_data
+                ORDER BY published_at DESC
+            ''', (current_date,))
+            
+            videos = [dict(row) for row in c.fetchall()]
+            
+            if not videos:
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "date": current_date,
+                        "channels": [],
+                        "total_channels": 0,
+                        "total_videos": 0,
+                        "metrics": {
+                            "average_videos_per_channel": 0,
+                            "total_coins_analyzed": 0
+                        }
+                    }
+                })
+            
+            # Organize videos by channel
+            channels = {}
+            for video in videos:
+                channel_name = video['channel_name']
+                if channel_name not in channels:
+                    channels[channel_name] = {
+                        "channel_name": channel_name,
+                        "channel_id": video['channel_id'],
+                        "videos": []
+                    }
+                
+                # Add video details to channel
+                channels[channel_name]['videos'].append({
+                    "video_id": video['video_id'],
+                    "title": video['title'],
+                    "url": video['url'],
+                    "thumbnail_url": video['thumbnail_url'],
+                    "views": video['views'],
+                    "published_at": video['published_at'],
+                    "coins_analyzed": video['coin_count']
+                })
+            
+            # Calculate statistics
+            total_videos = sum(len(channel['videos']) for channel in channels.values())
+            
+            # Convert to list and sort by number of videos
+            channels_list = sorted(
+                channels.values(),
+                key=lambda x: len(x['videos']),
+                reverse=True
+            )
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": current_date,
+                    "channels": channels_list,
+                    "total_channels": len(channels),
+                    "total_videos": total_videos,
+                    "metrics": {
+                        "average_videos_per_channel": round(total_videos / len(channels), 2),
+                        "total_coins_analyzed": sum(
+                            video['coins_analyzed'] 
+                            for channel in channels_list 
+                            for video in channel['videos']
+                        )
+                    }
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_todays_channels: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+#Future Improvement Features
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+CORS(app)
+
+# Enums for validation
+class ModelType(str, Enum):
+    lstm = "lstm"
+    nn = "nn"
+    gru = "gru"
+    arima = "arima"
+
+class CoinType(str, Enum):
+    btc = "btc"
+    eth = "eth"
+    xrp = "xrp"
+    bnb = "bnb"
+    sol = "sol"
+
+# Model configurations
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATHS = {
+    ModelType.lstm: {
+        'model': os.path.join(BASE_DIR, 'LSTM_price_prediction.keras'),
+        'scaler': os.path.join(BASE_DIR, 'LSTM_price_scaler.pkl')
+    },
+    ModelType.nn: {
+        'model': os.path.join(BASE_DIR, 'NN_price_prediction.keras'),
+        'scaler': os.path.join(BASE_DIR, 'NN_price_scaler.pkl')
+    },
+    ModelType.gru: {
+        'model': os.path.join(BASE_DIR, 'gru_model.h5'),
+        'scaler': None
+    },
+    ModelType.arima: {
+        'model': os.path.join(BASE_DIR, 'ARIMA_price_prediction.pkl'),
+        'scaler': None
+    }
+}
+
+class PricePoint:
+    def __init__(self, date: str, actual_price: Optional[float], predicted_price: float):
+        self.date = date
+        self.actual_price = actual_price
+        self.predicted_price = predicted_price
+    
+    def to_dict(self):
+        return {
+            "date": self.date,
+            "actual_price": self.actual_price,
+            "predicted_price": self.predicted_price
+        }
+
+def predict_deep_learning(model, data, scaler, prediction_days=60, future_days=30):
+    """Helper function for deep learning models (LSTM, NN, GRU)"""
+    try:
+        logger.debug("Starting deep learning prediction")
+        scaled_data = scaler.fit_transform(data['Close'].values.reshape(-1,1))
+        
+        # Prepare test data
+        test_start = dt.datetime(2020,1,1)
+        test_end = dt.datetime.now() + dt.timedelta(days=prediction_days)
+        test_data = yf.download(f"{data.index.name}-USD", start=test_start, end=test_end)
+        actual_prices = test_data['Close'].values
+        
+        total_dataset = pd.concat((data['Close'], test_data['Close']), axis=0)
+        model_inputs = total_dataset[len(total_dataset) - len(test_data) - prediction_days:].values
+        model_inputs = model_inputs.reshape(-1, 1)
+        model_inputs = scaler.transform(model_inputs)
+
+        # Prepare test sequences for historical predictions
+        x_test = []
+        for x in range(prediction_days, len(model_inputs)):
+            x_test.append(model_inputs[x-prediction_days:x, 0])
+        x_test = np.array(x_test)
+        x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
+
+        # Make historical predictions
+        prediction_prices = model.predict(x_test)
+        prediction_prices = scaler.inverse_transform(prediction_prices)
+
+        # Calculate future predictions
+        future_predictions = []
+        last_sequence = model_inputs[-prediction_days:]
+
+        for _ in range(future_days):
+            current_sequence = last_sequence.reshape((1, prediction_days, 1))
+            next_pred = model.predict(current_sequence, verbose=0)
+            next_pred = scaler.inverse_transform(next_pred)[0][0]
+            future_predictions.append(float(next_pred))
+            last_sequence = np.roll(last_sequence, -1)
+            last_sequence[-1] = scaler.transform([[next_pred]])[0][0]
+            
+        return test_data.index, actual_prices, prediction_prices, future_predictions
+
+    except Exception as e:
+        logger.error(f"Error in deep learning prediction: {str(e)}")
+        raise
+
+@app.route("/predict/<model_type>/<coin>")
+def predict(model_type: str, coin: str):
+    """Predict cryptocurrency prices"""
+    try:
+        # Validate model_type and coin
+        if model_type not in [m.value for m in ModelType]:
+            return jsonify({"error": f"Invalid model type: {model_type}"}), 400
+        if coin not in [c.value for c in CoinType]:
+            return jsonify({"error": f"Invalid coin type: {coin}"}), 400
+
+        logger.info(f"Starting prediction for {coin} using {model_type} model")
+        
+        # Load cryptocurrency data
+        start = dt.datetime(2016,1,1)
+        end = dt.datetime.now()
+        ticker = f"{coin.upper()}-USD"
+        data = yf.download(ticker, start=start, end=end)
+        
+        if data.empty:
+            return jsonify({"error": f"No data available for {ticker}"}), 400
+            
+        data.index.name = coin.upper()
+
+        result_array = []
+
+        # Load model and make predictions
+        if model_type == ModelType.arima.value:
+            with open(MODEL_PATHS[ModelType.arima]['model'], 'rb') as file:
+                loaded_model = pickle.load(file)
+            
+            # Prepare test data for ARIMA
+            test_start = dt.datetime(2020,1,1)
+            test_end = dt.datetime.now()
+            test_data = yf.download(ticker, start=test_start, end=test_end)
+            
+            model = ARIMA(data['Close'], order=loaded_model.order)
+            fitted_model = model.fit()
+            
+            # Historical predictions
+            prediction_prices = fitted_model.predict(start=len(data)-len(test_data), end=len(data)-1)
+            future_predictions = fitted_model.forecast(steps=30).tolist()
+            
+            # Create response data
+            for date, actual, predicted in zip(test_data.index, test_data['Close'], prediction_prices):
+                result_array.append(PricePoint(
+                    date=date.strftime('%Y-%m-%d'),
+                    actual_price=float(actual),
+                    predicted_price=float(predicted)
+                ).to_dict())
+                
+            # Add future predictions
+            future_dates = pd.date_range(start=test_data.index[-1], periods=31)[1:]
+            for date, predicted in zip(future_dates, future_predictions):
+                result_array.append(PricePoint(
+                    date=date.strftime('%Y-%m-%d'),
+                    actual_price=None,
+                    predicted_price=float(predicted)
+                ).to_dict())
+                
+        else:
+            model = load_model(MODEL_PATHS[ModelType(model_type)]['model'])
+            scaler = MinMaxScaler(feature_range=(0,1))
+            
+            # Get predictions from deep learning model
+            historical_dates, actual_prices, prediction_prices, future_predictions = predict_deep_learning(
+                model, data, scaler
+            )
+            
+            # Create response data for historical predictions
+            for date, actual, predicted in zip(historical_dates, actual_prices, prediction_prices.flatten()):
+                result_array.append(PricePoint(
+                    date=date.strftime('%Y-%m-%d'),
+                    actual_price=float(actual),
+                    predicted_price=float(predicted)
+                ).to_dict())
+                
+            # Add future predictions
+            future_dates = pd.date_range(start=historical_dates[-1], periods=31)[1:]
+            for date, predicted in zip(future_dates, future_predictions):
+                result_array.append(PricePoint(
+                    date=date.strftime('%Y-%m-%d'),
+                    actual_price=None,
+                    predicted_price=float(predicted)
+                ).to_dict())
+        
+        logger.info(f"Successfully generated predictions for {coin}")
+        return jsonify(result_array)
+    
+    except Exception as e:
+        logger.error(f"Error during prediction: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/health")
+def health_check():
+    """Health check endpoint that also verifies model files"""
+    try:
+        # Check if all model files exist
+        for model_type, paths in MODEL_PATHS.items():
+            if not os.path.exists(paths['model']):
+                return jsonify({
+                    "status": "unhealthy",
+                    "error": f"Missing model file for {model_type}: {paths['model']}"
+                }), 500
+            if paths['scaler'] and not os.path.exists(paths['scaler']):
+                return jsonify({
+                    "status": "unhealthy",
+                    "error": f"Missing scaler file for {model_type}: {paths['scaler']}"
+                }), 500
+        
+        return jsonify({"status": "healthy"})
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({"status": "unhealthy", "error": str(e)}), 500
     
 if __name__ == '__main__':
     init_db()
