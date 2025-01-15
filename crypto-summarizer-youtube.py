@@ -2014,7 +2014,7 @@ class PricePrediction:
         prediction_days: int = 60, 
         future_days: int = 30
     ) -> Dict[str, Any]:
-        """ARIMA prediction with proper error handling"""
+        """ARIMA prediction with adjusted historical prediction range"""
         try:
             # Load ARIMA model
             with open(self.model_paths[ModelType.arima]['model'], 'rb') as file:
@@ -2024,11 +2024,17 @@ class PricePrediction:
             model = ARIMA(data['Close'], order=arima_model.order)
             fitted_model = model.fit()
             
-            # Generate predictions
+            # Calculate start index to match the prediction_days parameter
+            # This ensures we get historical predictions for the same period as other models
+            start_idx = len(data) - prediction_days
+            
+            # Generate historical predictions starting from the calculated index
             historical_predictions = fitted_model.predict(
-                start=len(data)-prediction_days,
+                start=start_idx,
                 end=len(data)-1
             )
+            
+            # Generate future predictions
             future_predictions = fitted_model.forecast(steps=future_days).tolist()
             
             return {
@@ -2039,6 +2045,8 @@ class PricePrediction:
         except Exception as e:
             logger.error(f"Error in ARIMA prediction: {str(e)}")
             raise
+
+    
 
     def format_predictions(
         self,
