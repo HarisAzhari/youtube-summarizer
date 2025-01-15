@@ -2009,49 +2009,46 @@ class PricePrediction:
             raise
 
     def predict_arima(
-    def predict_arima(
-    self, 
-    data: pd.DataFrame, 
-    prediction_days: int = 60, 
-    future_days: int = 30
-) -> Dict[str, Any]:
-    """ARIMA prediction with specific test period starting from 2020"""
-    try:
-        # Load ARIMA model
-        with open(self.model_paths[ModelType.arima]['model'], 'rb') as file:
-            arima_model = pickle.load(file)
+        self, 
+        data: pd.DataFrame, 
+        prediction_days: int = 60, 
+        future_days: int = 30
+    ) -> Dict[str, Any]:
+        """ARIMA prediction with specific test period starting from 2020"""
+        try:
+            # Load ARIMA model
+            with open(self.model_paths[ModelType.arima]['model'], 'rb') as file:
+                arima_model = pickle.load(file)
+                
+            # Prepare test data starting from 2020
+            test_start = dt.datetime(2020, 1, 1)
+            test_end = dt.datetime.now()
+            symbol = data.index.name + "-USD" if data.index.name else "BTC-USD"  # Default to BTC if name not set
+            test_data = yf.download(symbol, start=test_start, end=test_end)
             
-        # Prepare test data starting from 2020
-        test_start = dt.datetime(2020, 1, 1)
-        test_end = dt.datetime.now()
-        symbol = data.index.name + "-USD" if data.index.name else "BTC-USD"  # Default to BTC if name not set
-        test_data = yf.download(symbol, start=test_start, end=test_end)
-        
-        # Fit model with complete data
-        model = ARIMA(data['Close'], order=arima_model.order)
-        fitted_model = model.fit()
-        
-        # Generate historical predictions for test period
-        historical_predictions = fitted_model.predict(
-            start=len(data) - len(test_data),
-            end=len(data) - 1
-        )
-        
-        # Generate future predictions
-        future_predictions = fitted_model.forecast(steps=future_days).tolist()
-        
-        return {
-            'historical_predictions': historical_predictions,
-            'future_predictions': future_predictions,
-            'test_dates': test_data.index,
-            'test_prices': test_data['Close'].values
-        }
+            # Fit model with complete data
+            model = ARIMA(data['Close'], order=arima_model.order)
+            fitted_model = model.fit()
             
-    except Exception as e:
-        logger.error(f"Error in ARIMA prediction: {str(e)}")
-        raise
-
-    
+            # Generate historical predictions for test period
+            historical_predictions = fitted_model.predict(
+                start=len(data) - len(test_data),
+                end=len(data) - 1
+            )
+            
+            # Generate future predictions
+            future_predictions = fitted_model.forecast(steps=future_days).tolist()
+            
+            return {
+                'historical_predictions': historical_predictions,
+                'future_predictions': future_predictions,
+                'test_dates': test_data.index,
+                'test_prices': test_data['Close'].values
+            }
+                
+        except Exception as e:
+            logger.error(f"Error in ARIMA prediction: {str(e)}")
+            raise
 
     def format_predictions(
         self,
