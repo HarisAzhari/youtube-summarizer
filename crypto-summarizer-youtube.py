@@ -20,8 +20,6 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 import datetime as dt
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import load_model
 import joblib
 import pickle
 from statsmodels.tsa.arima.model import ARIMA
@@ -115,7 +113,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=53, second=0, microsecond=0)
+    next_run = now.replace(hour=9, minute=6, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -397,7 +395,7 @@ def check_recent_videos(playlist_id, api_key, channel_info):
     videos = []
     next_page_token = None
     now = datetime.now(pytz.UTC)
-    day_ago = now - timedelta(days=37)
+    day_ago = now - timedelta(days=3)
     
     while True:
         base_url = f"https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={playlist_id}&maxResults=50&key={api_key}"
@@ -1889,248 +1887,93 @@ def get_todays_channels():
             "status": "error",
             "message": str(e)
         }), 500
-    
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-class ModelType(str, Enum):
-    lstm = "lstm"
-    nn = "nn"
-    gru = "gru"
-    arima = "arima"
-
-class CoinType(str, Enum):
-    btc = "btc"
-    eth = "eth"
-    xrp = "xrp"
-    bnb = "bnb"
-    sol = "sol"
-
-# Mapping for cryptocurrency symbols
-COIN_SYMBOLS = {
-    CoinType.btc: "BTC-USD",
-    CoinType.eth: "ETH-USD",
-    CoinType.xrp: "XRP-USD",
-    CoinType.bnb: "BNB-USD",
-    CoinType.sol: "SOL-USD"
-}
-
-class PricePrediction:
-    def __init__(self, base_dir: str):
-        self.base_dir = base_dir
-        self.model_paths = {
-            ModelType.lstm: {
-                'model': os.path.join(base_dir, 'LSTM_price_prediction.keras'),
-                'scaler': os.path.join(base_dir, 'LSTM_price_scaler.pkl')
-            },
-            ModelType.nn: {
-                'model': os.path.join(base_dir, 'NN_price_prediction.keras'),
-                'scaler': os.path.join(base_dir, 'NN_price_scaler.pkl')
-            },
-            ModelType.gru: {
-                'model': os.path.join(base_dir, 'gru_model.h5'),
-                'scaler': None
-            },
-            ModelType.arima: {
-                'model': os.path.join(base_dir, 'ARIMA_price_prediction.pkl'),
-                'scaler': None
-            }
-        }
-        
-    def load_crypto_data(self, coin: str, start_date: dt.datetime, end_date: dt.datetime) -> pd.DataFrame:
-        """Load cryptocurrency data with proper error handling"""
-        try:
-            symbol = COIN_SYMBOLS.get(CoinType(coin))
-            if not symbol:
-                raise ValueError(f"Invalid coin type: {coin}")
-            
-            data = yf.download(symbol, start=start_date, end=end_date)
-            if data.empty:
-                raise ValueError(f"No data available for {symbol}")
-            
-            return data
-        except Exception as e:
-            logger.error(f"Error loading data for {coin}: {str(e)}")
-            raise
-
-    def prepare_sequences(self, data: np.ndarray, sequence_length: int) -> np.ndarray:
-        """Prepare sequences for deep learning models"""
-        sequences = []
-        for i in range(sequence_length, len(data)):
-            sequences.append(data[i-sequence_length:i])
-        return np.array(sequences)
-
-    def predict_deep_learning(
-        self, 
-        model_type: ModelType, 
-        data: pd.DataFrame, 
-        prediction_days: int = 60, 
-        future_days: int = 30
-    ) -> Dict[str, Any]:
-        """Enhanced deep learning prediction with proper error handling"""
-        try:
-            # Load model and scaler
-            model = load_model(self.model_paths[model_type]['model'])
-            scaler = MinMaxScaler(feature_range=(0, 1))
-            
-            # Scale the data
-            scaled_data = scaler.fit_transform(data['Close'].values.reshape(-1, 1))
-            
-            # Prepare sequences
-            x_test = self.prepare_sequences(scaled_data, prediction_days)
-            x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
-            
-            # Make predictions
-            predictions = model.predict(x_test)
-            predictions = scaler.inverse_transform(predictions)
-            
-            # Generate future predictions
-            future_predictions = []
-            last_sequence = scaled_data[-prediction_days:]
-            
-            for _ in range(future_days):
-                next_pred = model.predict(
-                    last_sequence.reshape(1, prediction_days, 1), 
-                    verbose=0
-                )
-                next_pred = scaler.inverse_transform(next_pred)[0][0]
-                future_predictions.append(float(next_pred))
-                last_sequence = np.roll(last_sequence, -1)
-                last_sequence[-1] = scaler.transform([[next_pred]])[0][0]
-            
-            return {
-                'historical_predictions': predictions.flatten(),
-                'future_predictions': future_predictions
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in deep learning prediction: {str(e)}")
-            raise
-
-    def predict_arima(
-        self, 
-        data: pd.DataFrame, 
-        prediction_days: int = 60, 
-        future_days: int = 30
-    ) -> Dict[str, Any]:
-        """ARIMA prediction with specific test period starting from 2020"""
-        try:
-            # Load ARIMA model
-            with open(self.model_paths[ModelType.arima]['model'], 'rb') as file:
-                arima_model = pickle.load(file)
-                
-            # Prepare test data starting from 2020
-            test_start = dt.datetime(2020, 1, 1)
-            test_end = dt.datetime.now()
-            symbol = data.index.name + "-USD" if data.index.name else "BTC-USD"  # Default to BTC if name not set
-            test_data = yf.download(symbol, start=test_start, end=test_end)
-            
-            # Fit model with complete data
-            model = ARIMA(data['Close'], order=arima_model.order)
-            fitted_model = model.fit()
-            
-            # Generate historical predictions for test period
-            historical_predictions = fitted_model.predict(
-                start=len(data) - len(test_data),
-                end=len(data) - 1
-            )
-            
-            # Generate future predictions
-            future_predictions = fitted_model.forecast(steps=future_days).tolist()
-            
-            return {
-                'historical_predictions': historical_predictions,
-                'future_predictions': future_predictions,
-                'test_dates': test_data.index,
-                'test_prices': test_data['Close'].values
-            }
-                
-        except Exception as e:
-            logger.error(f"Error in ARIMA prediction: {str(e)}")
-            raise
-
-    def format_predictions(
-        self,
-        dates: pd.DatetimeIndex,
-        actual_prices: np.ndarray,
-        predictions: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Format predictions into a consistent response structure"""
-        result = []
-        
-        # Format historical predictions
-        for date, actual, pred in zip(
-            dates[-len(predictions['historical_predictions']):],
-            actual_prices[-len(predictions['historical_predictions']):],
-            predictions['historical_predictions']
-        ):
-            result.append({
-                "date": date.strftime('%Y-%m-%d'),
-                "actual_price": float(actual),
-                "predicted_price": float(pred)
-            })
-        
-        # Add future predictions
-        future_dates = pd.date_range(
-            start=dates[-1] + pd.Timedelta(days=1),
-            periods=len(predictions['future_predictions'])
-        )
-        
-        for date, pred in zip(future_dates, predictions['future_predictions']):
-            result.append({
-                "date": date.strftime('%Y-%m-%d'),
-                "actual_price": None,
-                "predicted_price": float(pred)
-            })
-        
-        return result
-
-def predict_endpoint(model_type: str, coin: str) -> Dict[str, Any]:
-    """Enhanced prediction endpoint with proper validation and error handling"""
+@app.route('/youtube/top-coins')
+def get_top_coins():
+    """Get daily sentiment analysis for specific coins (BTC, ETH, XRP, SOL, BNB) from the last 7 days"""
     try:
-        # Validate input parameters
-        if model_type not in [m.value for m in ModelType]:
-            return jsonify({"error": f"Invalid model type: {model_type}"}), 400
-        if coin not in [c.value for c in CoinType]:
-            return jsonify({"error": f"Invalid coin type: {coin}"}), 400
-        
-        logger.info(f"Starting prediction for {coin} using {model_type} model")
-        
-        # Initialize prediction class
-        predictor = PricePrediction(os.path.dirname(os.path.abspath(__file__)))
-        
-        # Load data
-        start_date = dt.datetime(2016, 1, 1)
-        end_date = dt.datetime.now()
-        data = predictor.load_crypto_data(coin, start_date, end_date)
-        
-        # Make predictions based on model type
-        if model_type == ModelType.arima.value:
-            predictions = predictor.predict_arima(data)
-        else:
-            predictions = predictor.predict_deep_learning(ModelType(model_type), data)
-        
-        # Format results
-        result = predictor.format_predictions(
-            data.index,
-            data['Close'].values,
-            predictions
-        )
-        
-        logger.info(f"Successfully generated predictions for {coin}")
-        return jsonify(result)
-    
+        # Define exact coin names to match
+        target_coins = ["Bitcoin", "Ethereum", "XRP", "Solana", "BNB"]
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get current time in Malaysia timezone
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            current_date = datetime.now(malaysia_tz)
+            seven_days_ago = current_date - timedelta(days=7)
+            
+            # Get analyses for the last 7 days with published_at date
+            c.execute('''
+                SELECT 
+                    ca.coin_mentioned,
+                    ca.indicator,
+                    DATE(v.published_at) as pub_date
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE 
+                    v.published_at >= ? 
+                    AND ca.coin_mentioned IN (?, ?, ?, ?, ?)
+                ORDER BY v.published_at ASC
+            ''', (seven_days_ago.strftime('%Y-%m-%d'), *target_coins))
+            
+            analyses = [dict(row) for row in c.fetchall()]
+            
+            if not analyses:
+                return jsonify({
+                    "status": "error",
+                    "message": "No analyses found for the last 7 days"
+                }), 404
+
+            # Initialize results dictionary with dates
+            date_range = [(current_date - timedelta(days=x)).strftime('%Y-%m-%d') 
+                         for x in range(7, -1, -1)]
+            results = {coin: {date: {"bullish": 0, "bearish": 0, "neutral": 0} 
+                            for date in date_range} 
+                      for coin in target_coins}
+            
+            # Process each analysis
+            for analysis in analyses:
+                coin = analysis['coin_mentioned']
+                pub_date = analysis['pub_date']
+                
+                if pub_date in results[coin]:
+                    # Count sentiment
+                    indicator = analysis['indicator'].lower()
+                    if 'bullish' in indicator:
+                        results[coin][pub_date]['bullish'] += 1
+                    elif 'bearish' in indicator:
+                        results[coin][pub_date]['bearish'] += 1
+                    else:
+                        results[coin][pub_date]['neutral'] += 1
+
+            # Format final response
+            response_data = {}
+            for coin, dates in results.items():
+                response_data[coin] = {
+                    date: {
+                        "bullish": data['bullish'],
+                        "bearish": data['bearish'],
+                        "neutral": data['neutral'],
+                        "total": data['bullish'] + data['bearish'] + data['neutral']
+                    }
+                    for date, data in dates.items()
+                }
+
+            return jsonify({
+                "status": "success",
+                "data": response_data,
+                "date_range": date_range
+            })
+
     except Exception as e:
-        logger.error(f"Error during prediction: {str(e)}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        print(f"Error in get_top_coins: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
-# Flask route implementation
-@app.route("/predict/<model_type>/<coin>")
-def predict(model_type: str, coin: str):
-    return predict_endpoint(model_type, coin)
-
-    
 if __name__ == '__main__':
     init_db()
     app.run(port=8080, host='0.0.0.0')
