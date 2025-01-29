@@ -119,7 +119,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=56, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -1434,20 +1434,33 @@ def override_coin_name():
                     "message": f"Missing required field: {field}"
                 }), 400
 
-        current_name = data['current_name']
-        new_name = data['new_name']
+        current_name = data['current_name'].strip()
+        new_name = data['new_name'].strip()
 
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # First find all affected videos with their details
+            # First check if the new name already exists
+            c.execute('''
+                SELECT COUNT(*) as count, 
+                       GROUP_CONCAT(DISTINCT coin_mentioned) as variations
+                FROM coin_analysis 
+                WHERE LOWER(coin_mentioned) = LOWER(?)
+            ''', (new_name,))
+            
+            existing = c.fetchone()
+            existing_count = existing['count']
+            existing_variations = existing['variations'].split(',') if existing['variations'] else []
+            
+            # Find videos with current name
             c.execute('''
                 SELECT DISTINCT 
                     v.video_id,
                     v.title,
                     v.channel_name,
-                    v.url
+                    v.url,
+                    ca.coin_mentioned
                 FROM coin_analysis ca
                 JOIN videos v ON ca.video_id = v.video_id
                 WHERE ca.coin_mentioned = ?
@@ -1458,7 +1471,8 @@ def override_coin_name():
             if not affected_videos:
                 return jsonify({
                     "status": "error",
-                    "message": f"No videos found with coin name: {current_name}"
+                    "message": f"No videos found with coin name: {current_name}",
+                    "note": f"Existing variations of target name: {existing_variations}" if existing_variations else None
                 }), 404
             
             # Insert the edit record
@@ -1469,36 +1483,48 @@ def override_coin_name():
             
             edit_id = c.lastrowid
             
-            # Update coin names in all affected videos
+            # Update coin names
             c.execute('''
                 UPDATE coin_analysis 
                 SET coin_mentioned = ?
                 WHERE coin_mentioned = ?
             ''', (new_name, current_name))
             
-            # Record all affected videos
+            # Record affected videos
             for video in affected_videos:
                 c.execute('''
                     INSERT INTO video_edits (edit_id, video_id)
                     VALUES (?, ?)
                 ''', (edit_id, video['video_id']))
 
-            # Get the timestamp of the edit
-            c.execute('SELECT edited_at FROM coin_edits WHERE id = ?', (edit_id,))
-            timestamp = c.fetchone()[0]
+            # Get updated counts after the merge
+            c.execute('''
+                SELECT COUNT(*) as count
+                FROM coin_analysis 
+                WHERE LOWER(coin_mentioned) = LOWER(?)
+            ''', (new_name,))
+            
+            new_count = c.fetchone()['count']
 
             return jsonify({
                 "status": "success",
                 "data": {
                     "current_name": current_name,
                     "new_name": new_name,
-                    "timestamp": timestamp,
+                    "timestamp": datetime.now().isoformat(),
+                    "merge_stats": {
+                        "existing_mentions": existing_count,
+                        "mentions_added": len(affected_videos),
+                        "total_after_merge": new_count,
+                        "existing_variations": existing_variations
+                    },
                     "videos_affected": len(affected_videos),
                     "videos": [{
                         "video_id": video["video_id"],
                         "title": video["title"],
                         "channel": video["channel_name"],
-                        "url": video["url"]
+                        "url": video["url"],
+                        "original_name": video["coin_mentioned"]
                     } for video in affected_videos]
                 }
             })
@@ -1511,20 +1537,24 @@ def override_coin_name():
 
 @app.route('/youtube/edit-history')
 def get_edit_history():
-    """Get the simplified history of all coin name edits"""
+    """Get the history of all coin name edits with details"""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # Get all edits with simplified format
+            # Get all edits with affected video counts
             c.execute('''
                 SELECT 
-                    current_name,
-                    new_name,
-                    strftime('%H:%M:%S', edited_at) as timestamp
-                FROM coin_edits
-                ORDER BY edited_at DESC
+                    ce.id as edit_id,
+                    ce.current_name,
+                    ce.new_name,
+                    ce.edited_at,
+                    COUNT(ve.video_id) as affected_videos
+                FROM coin_edits ce
+                LEFT JOIN video_edits ve ON ce.id = ve.edit_id
+                GROUP BY ce.id
+                ORDER BY ce.edited_at DESC
             ''')
             
             edits = [dict(row) for row in c.fetchall()]
@@ -1532,10 +1562,90 @@ def get_edit_history():
             return jsonify({
                 "status": "success",
                 "data": {
-                    "log": edits
+                    "total_edits": len(edits),
+                    "edits": [{
+                        "edit_id": edit["edit_id"],
+                        "from": edit["current_name"],
+                        "to": edit["new_name"],
+                        "timestamp": edit["edited_at"],
+                        "affected_videos": edit["affected_videos"]
+                    } for edit in edits]
                 }
             })
+            
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
+@app.route('/youtube/undo-edit', methods=['POST'])
+def undo_last_edit():
+    """Undo the most recent coin name edit"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get the most recent edit
+            c.execute('''
+                SELECT 
+                    id as edit_id,
+                    current_name,
+                    new_name,
+                    edited_at
+                FROM coin_edits
+                ORDER BY edited_at DESC
+                LIMIT 1
+            ''')
+            
+            last_edit = c.fetchone()
+            
+            if not last_edit:
+                return jsonify({
+                    "status": "error",
+                    "message": "No edits to undo"
+                }), 404
+            
+            # Get affected videos
+            c.execute('''
+                SELECT video_id
+                FROM video_edits
+                WHERE edit_id = ?
+            ''', (last_edit['edit_id'],))
+            
+            affected_videos = [row[0] for row in c.fetchall()]
+            
+            # Revert the coin name changes
+            c.execute('''
+                UPDATE coin_analysis
+                SET coin_mentioned = ?
+                WHERE video_id IN (
+                    SELECT video_id 
+                    FROM video_edits 
+                    WHERE edit_id = ?
+                )
+                AND coin_mentioned = ?
+            ''', (last_edit['current_name'], last_edit['edit_id'], last_edit['new_name']))
+            
+            # Delete the edit records
+            c.execute('DELETE FROM video_edits WHERE edit_id = ?', (last_edit['edit_id'],))
+            c.execute('DELETE FROM coin_edits WHERE id = ?', (last_edit['edit_id'],))
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "undone_edit": {
+                        "edit_id": last_edit['edit_id'],
+                        "from": last_edit['current_name'],
+                        "to": last_edit['new_name'],
+                        "timestamp": last_edit['edited_at'],
+                        "affected_videos": len(affected_videos)
+                    },
+                    "message": f"Successfully reverted {len(affected_videos)} videos from '{last_edit['new_name']}' back to '{last_edit['current_name']}'"
+                }
+            })
+            
     except Exception as e:
         return jsonify({
             "status": "error",
@@ -2215,6 +2325,298 @@ def predict_endpoint(model_type: str, coin: str) -> Dict[str, Any]:
 @app.route("/predict/<model_type>/<coin>")
 def predict(model_type: str, coin: str):
     return predict_endpoint(model_type, coin)
+
+@app.route('/youtube/unique-coins')
+def get_unique_coins_with_stats():
+    """Get all unique coins with mention statistics and sentiment breakdown"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get unique coins with mention counts and sentiment breakdown
+            c.execute('''
+                WITH sentiment_counts AS (
+                    SELECT 
+                        coin_mentioned,
+                        COUNT(*) as total_mentions,
+                        SUM(CASE WHEN lower(indicator) LIKE '%bullish%' THEN 1 ELSE 0 END) as bullish_count,
+                        SUM(CASE WHEN lower(indicator) LIKE '%bearish%' THEN 1 ELSE 0 END) as bearish_count,
+                        SUM(CASE 
+                            WHEN lower(indicator) NOT LIKE '%bullish%' 
+                            AND lower(indicator) NOT LIKE '%bearish%' 
+                            THEN 1 ELSE 0 END) as neutral_count,
+                        COUNT(DISTINCT video_id) as video_count,
+                        MAX(created_at) as last_mentioned
+                    FROM coin_analysis
+                    GROUP BY coin_mentioned
+                )
+                SELECT 
+                    coin_mentioned,
+                    total_mentions,
+                    bullish_count,
+                    bearish_count,
+                    neutral_count,
+                    video_count,
+                    last_mentioned,
+                    ROUND(CAST(bullish_count AS FLOAT) / total_mentions * 100, 2) as bullish_percentage,
+                    ROUND(CAST(bearish_count AS FLOAT) / total_mentions * 100, 2) as bearish_percentage,
+                    ROUND(CAST(neutral_count AS FLOAT) / total_mentions * 100, 2) as neutral_percentage
+                FROM sentiment_counts
+                ORDER BY total_mentions DESC
+            ''')
+            
+            coins = [dict(row) for row in c.fetchall()]
+            
+            # Calculate overall statistics
+            total_unique_coins = len(coins)
+            total_mentions = sum(coin['total_mentions'] for coin in coins)
+            total_videos = len(set(
+                row[0] for row in c.execute('SELECT video_id FROM coin_analysis').fetchall()
+            ))
+            
+            # Get top mentioned coins (top 10)
+            top_mentioned = coins[:10] if len(coins) > 10 else coins
+            
+            # Get most bullish coins (top 5 with at least 5 mentions)
+            most_bullish = sorted(
+                [coin for coin in coins if coin['total_mentions'] >= 5],
+                key=lambda x: x['bullish_percentage'],
+                reverse=True
+            )[:5]
+            
+            # Get most bearish coins (top 5 with at least 5 mentions)
+            most_bearish = sorted(
+                [coin for coin in coins if coin['total_mentions'] >= 5],
+                key=lambda x: x['bearish_percentage'],
+                reverse=True
+            )[:5]
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "statistics": {
+                        "total_unique_coins": total_unique_coins,
+                        "total_mentions": total_mentions,
+                        "total_videos": total_videos,
+                        "average_mentions_per_video": round(total_mentions / total_videos, 2) if total_videos > 0 else 0
+                    },
+                    "insights": {
+                        "top_mentioned": top_mentioned,
+                        "most_bullish": most_bullish,
+                        "most_bearish": most_bearish
+                    },
+                    "all_coins": coins
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_unique_coins_with_stats: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/coins/names')
+def get_coin_names():
+    """Get just the list of unique coin names"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Simple query to get just unique coin names
+            c.execute('''
+                SELECT DISTINCT coin_mentioned
+                FROM coin_analysis 
+                ORDER BY coin_mentioned ASC
+            ''')
+            
+            coins = [row[0] for row in c.fetchall()]
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "coins": coins,
+                    "total": len(coins)
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_coin_names: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/reason/today')
+def get_todays_reasons():
+    """Get all reasons from today's analyses with their associated coins and sources"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get current date in Malaysia timezone
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            current_date = datetime.now(malaysia_tz).strftime("%Y-%m-%d")
+            
+            # Modified query to handle the datetime format in the database
+            c.execute('''
+                SELECT 
+                    v.channel_name,
+                    v.title as video_title,
+                    v.url as video_url,
+                    ca.coin_mentioned,
+                    ca.reasons,
+                    ca.indicator,
+                    v.published_at,
+                    v.processed_at
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE DATE(v.processed_at) = DATE('now')
+                ORDER BY v.processed_at DESC, ca.coin_mentioned ASC
+            ''')
+            
+            analyses = [dict(row) for row in c.fetchall()]
+            
+            if not analyses:
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "date": current_date,
+                        "total_analyses": 0,
+                        "reasons": [],
+                        "statistics": {
+                            "total_coins": 0,
+                            "total_channels": 0,
+                            "total_reasons": 0
+                        }
+                    }
+                })
+            
+            # Process and structure the reasons
+            structured_reasons = []
+            for analysis in analyses:
+                # Parse the JSON reasons
+                reasons_list = json.loads(analysis['reasons'])
+                
+                # Add each reason with its context
+                for reason in reasons_list:
+                    structured_reasons.append({
+                        "coin": analysis['coin_mentioned'],
+                        "reason": reason,
+                        "sentiment": analysis['indicator'],
+                        "source": {
+                            "channel": analysis['channel_name'],
+                            "video_title": analysis['video_title'],
+                            "video_url": analysis['video_url'],
+                            "published_at": analysis['published_at'],
+                            "processed_at": analysis['processed_at']
+                        }
+                    })
+            
+            # Calculate statistics
+            unique_coins = len(set(analysis['coin_mentioned'] for analysis in analyses))
+            unique_channels = len(set(analysis['channel_name'] for analysis in analyses))
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": current_date,
+                    "total_analyses": len(analyses),
+                    "reasons": structured_reasons,
+                    "statistics": {
+                        "total_coins": unique_coins,
+                        "total_channels": unique_channels,
+                        "total_reasons": len(structured_reasons),
+                        "average_reasons_per_coin": round(len(structured_reasons) / unique_coins, 2) if unique_coins > 0 else 0
+                    }
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_todays_reasons: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/coin/mentions', methods=['POST'])
+def get_coin_mentions():
+    """Get all YouTube channels and their videos that mentioned a specific coin"""
+    try:
+        # Validate request data
+        data = request.get_json()
+        if not data or 'coin_name' not in data:
+            return jsonify({
+                "status": "error",
+                "message": "Missing required field: coin_name"
+            }), 400
+
+        coin_name = data['coin_name']
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get all mentions of the coin with channel and video details
+            c.execute('''
+                SELECT DISTINCT
+                    v.channel_name,
+                    v.channel_id,
+                    v.video_id,
+                    v.title,
+                    v.url,
+                    v.views,
+                    v.published_at,
+                    ca.reasons,
+                    ca.indicator
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE LOWER(ca.coin_mentioned) LIKE LOWER(?)
+                ORDER BY v.published_at DESC
+            ''', (f"%{coin_name}%",))
+            
+            results = [dict(row) for row in c.fetchall()]
+            
+            if not results:
+                return jsonify({
+                    "status": "success",
+                    "message": f"No mentions found for {coin_name}",
+                    "data": []
+                })
+
+            # Group by channel
+            channels = {}
+            for row in results:
+                channel_name = row['channel_name']
+                if channel_name not in channels:
+                    channels[channel_name] = {
+                        "channel_name": channel_name,
+                        "channel_id": row['channel_id'],
+                        "mentions": []
+                    }
+                
+                channels[channel_name]["mentions"].append({
+                    "video_title": row['title'],
+                    "video_url": row['url'],
+                    "views": row['views'],
+                    "published_at": row['published_at'],
+                    "sentiment": row['indicator'],
+                    "reasons": json.loads(row['reasons'])
+                })
+
+            return jsonify({
+                "status": "success",
+                "data": list(channels.values())
+            })
+
+    except Exception as e:
+        print(f"Error in get_coin_mentions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 if __name__ == '__main__':
     init_db()
