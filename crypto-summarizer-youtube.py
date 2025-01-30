@@ -2618,20 +2618,36 @@ def get_coin_mentions():
             "message": str(e)
         }), 500
 
-@app.route('/youtube/today-analysis')
-def get_todays_channel_analysis():
-    """Get yesterday's channels with their coin mentions and analysis"""
+@app.route('/youtube/today-analysis/<date>')
+def get_todays_channel_analysis(date):
+    """Get channel analysis for a specific date in Malaysia timezone (UTC+8)"""
     try:
+        # Validate date format
+        try:
+            # Parse the input date (expecting YYYY-MM-DD format)
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid date format. Please use YYYY-MM-DD"
+            }), 400
+
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # Get yesterday's date in Malaysia timezone
+            # Get Malaysia timezone (UTC+8)
             malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
-            today = datetime.now(malaysia_tz)
-            yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
             
-            # Modified query to use published_at and look at yesterday's videos
+            # Set the target date range in Malaysia time
+            start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_my = start_my.replace(hour=23, minute=59, second=59)
+            
+            # Convert to UTC for database query
+            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Query with UTC timestamp range
             c.execute('''
                 WITH video_analyses AS (
                     SELECT 
@@ -2644,109 +2660,78 @@ def get_todays_channel_analysis():
                         v.views,
                         v.published_at,
                         v.processed_at,
-                        GROUP_CONCAT(DISTINCT ca.coin_mentioned) as coins_mentioned,
-                        COUNT(DISTINCT ca.coin_mentioned) as coin_count,
-                        json_group_array(
-                            json_object(
-                                'coin', ca.coin_mentioned,
-                                'reasons', ca.reasons,
-                                'indicator', ca.indicator
-                            )
-                        ) as analyses
+                        ca.coin_mentioned,
+                        ca.reasons,
+                        ca.indicator
                     FROM videos v
                     LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
-                    WHERE DATE(v.published_at) = ?
-                    GROUP BY v.video_id
+                    WHERE v.published_at BETWEEN ? AND ?
+                    AND ca.coin_mentioned IS NOT NULL
                 )
                 SELECT * FROM video_analyses
                 ORDER BY published_at DESC
-            ''', (yesterday,))
+            ''', (start_utc, end_utc))
             
-            videos = [dict(row) for row in c.fetchall()]
+            rows = c.fetchall()
             
-            if not videos:
+            if not rows:
                 return jsonify({
                     "status": "success",
                     "data": {
-                        "date": yesterday,
-                        "channels": [],
-                        "total_channels": 0,
-                        "total_videos": 0,
-                        "total_coins_analyzed": 0
+                        "date": date,
+                        "reasons": [],
+                        "statistics": {
+                            "total_videos": 0,
+                            "total_coins": 0,
+                            "total_reasons": 0
+                        }
                     }
                 })
             
-            # Rest of the processing remains the same...
-            channels = {}
-            for video in videos:
-                channel_name = video['channel_name']
-                if channel_name not in channels:
-                    channels[channel_name] = {
-                        "channel_name": channel_name,
-                        "channel_id": video['channel_id'],
-                        "videos": []
-                    }
-                
+            # Format the response
+            reasons = []
+            coins_mentioned = set()
+            
+            for row in rows:
                 try:
-                    analyses = json.loads(video['analyses'])
-                    for analysis in analyses:
-                        analysis['reasons'] = json.loads(analysis['reasons'])
-                except Exception as e:
-                    print(f"Error parsing analyses for video {video['video_id']}: {str(e)}")
-                    analyses = []
-                
-                channels[channel_name]['videos'].append({
-                    "video_id": video['video_id'],
-                    "title": video['video_title'],
-                    "url": video['video_url'],
-                    "thumbnail_url": video['thumbnail_url'],
-                    "views": video['views'],
-                    "published_at": video['published_at'],
-                    "processed_at": video['processed_at'],
-                    "coins_mentioned": video['coins_mentioned'].split(',') if video['coins_mentioned'] else [],
-                    "coin_count": video['coin_count'],
-                    "analyses": analyses
-                })
-            
-            channels_list = list(channels.values())
-            total_coins = sum(
-                video['coin_count']
-                for channel in channels_list
-                for video in channel['videos']
-            )
-            
-            statistics = {
-                "total_channels": len(channels),
-                "total_videos": len(videos),
-                "total_coins_analyzed": total_coins,
-                "average_coins_per_video": round(total_coins / len(videos), 2) if videos else 0,
-                "coins_distribution": {}
-            }
-            
-            all_coins = {}
-            for channel in channels_list:
-                for video in channel['videos']:
-                    for analysis in video['analyses']:
-                        coin = analysis['coin']
-                        if coin not in all_coins:
-                            all_coins[coin] = {
-                                "mentions": 0,
-                                "bullish_count": 0,
-                                "bearish_count": 0
+                    # Parse the reasons JSON string
+                    parsed_reasons = json.loads(row['reasons'])
+                    coins_mentioned.add(row['coin_mentioned'])
+                    
+                    # Create a reason entry for each individual reason
+                    for reason in parsed_reasons:
+                        reasons.append({
+                            "coin": row['coin_mentioned'],
+                            "reason": reason,
+                            "sentiment": row['indicator'],
+                            "source": {
+                                "channel": row['channel_name'],
+                                "video_title": row['video_title'],
+                                "video_url": row['video_url'],
+                                "published_at": row['published_at'],
+                                "processed_at": row['processed_at']
                             }
-                        all_coins[coin]["mentions"] += 1
-                        if "bullish" in analysis['indicator'].lower():
-                            all_coins[coin]["bullish_count"] += 1
-                        elif "bearish" in analysis['indicator'].lower():
-                            all_coins[coin]["bearish_count"] += 1
+                        })
+                except Exception as e:
+                    print(f"Error parsing reasons for video {row['video_id']}: {str(e)}")
+                    continue
             
-            statistics["coins_distribution"] = all_coins
+            # Calculate statistics
+            statistics = {
+                "total_videos": len(set(row['video_id'] for row in rows)),
+                "total_coins": len(coins_mentioned),
+                "total_reasons": len(reasons),
+                "coins_breakdown": {
+                    coin: len([r for r in reasons if r['coin'] == coin])
+                    for coin in coins_mentioned
+                }
+            }
             
             return jsonify({
                 "status": "success",
                 "data": {
-                    "date": yesterday,
-                    "channels": channels_list,
+                    "date": date,
+                    "reasons": reasons,
                     "statistics": statistics
                 }
             })
