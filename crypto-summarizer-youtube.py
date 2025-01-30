@@ -119,7 +119,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=56, second=0, microsecond=0)
+    next_run = now.replace(hour=8, minute=38, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -2613,6 +2613,146 @@ def get_coin_mentions():
 
     except Exception as e:
         print(f"Error in get_coin_mentions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/today-analysis')
+def get_todays_channel_analysis():
+    """Get yesterday's channels with their coin mentions and analysis"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get yesterday's date in Malaysia timezone
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            today = datetime.now(malaysia_tz)
+            yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+            
+            # Modified query to use published_at and look at yesterday's videos
+            c.execute('''
+                WITH video_analyses AS (
+                    SELECT 
+                        v.channel_name,
+                        v.channel_id,
+                        v.video_id,
+                        v.title as video_title,
+                        v.url as video_url,
+                        v.thumbnail_url,
+                        v.views,
+                        v.published_at,
+                        v.processed_at,
+                        GROUP_CONCAT(DISTINCT ca.coin_mentioned) as coins_mentioned,
+                        COUNT(DISTINCT ca.coin_mentioned) as coin_count,
+                        json_group_array(
+                            json_object(
+                                'coin', ca.coin_mentioned,
+                                'reasons', ca.reasons,
+                                'indicator', ca.indicator
+                            )
+                        ) as analyses
+                    FROM videos v
+                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
+                    WHERE DATE(v.published_at) = ?
+                    GROUP BY v.video_id
+                )
+                SELECT * FROM video_analyses
+                ORDER BY published_at DESC
+            ''', (yesterday,))
+            
+            videos = [dict(row) for row in c.fetchall()]
+            
+            if not videos:
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "date": yesterday,
+                        "channels": [],
+                        "total_channels": 0,
+                        "total_videos": 0,
+                        "total_coins_analyzed": 0
+                    }
+                })
+            
+            # Rest of the processing remains the same...
+            channels = {}
+            for video in videos:
+                channel_name = video['channel_name']
+                if channel_name not in channels:
+                    channels[channel_name] = {
+                        "channel_name": channel_name,
+                        "channel_id": video['channel_id'],
+                        "videos": []
+                    }
+                
+                try:
+                    analyses = json.loads(video['analyses'])
+                    for analysis in analyses:
+                        analysis['reasons'] = json.loads(analysis['reasons'])
+                except Exception as e:
+                    print(f"Error parsing analyses for video {video['video_id']}: {str(e)}")
+                    analyses = []
+                
+                channels[channel_name]['videos'].append({
+                    "video_id": video['video_id'],
+                    "title": video['video_title'],
+                    "url": video['video_url'],
+                    "thumbnail_url": video['thumbnail_url'],
+                    "views": video['views'],
+                    "published_at": video['published_at'],
+                    "processed_at": video['processed_at'],
+                    "coins_mentioned": video['coins_mentioned'].split(',') if video['coins_mentioned'] else [],
+                    "coin_count": video['coin_count'],
+                    "analyses": analyses
+                })
+            
+            channels_list = list(channels.values())
+            total_coins = sum(
+                video['coin_count']
+                for channel in channels_list
+                for video in channel['videos']
+            )
+            
+            statistics = {
+                "total_channels": len(channels),
+                "total_videos": len(videos),
+                "total_coins_analyzed": total_coins,
+                "average_coins_per_video": round(total_coins / len(videos), 2) if videos else 0,
+                "coins_distribution": {}
+            }
+            
+            all_coins = {}
+            for channel in channels_list:
+                for video in channel['videos']:
+                    for analysis in video['analyses']:
+                        coin = analysis['coin']
+                        if coin not in all_coins:
+                            all_coins[coin] = {
+                                "mentions": 0,
+                                "bullish_count": 0,
+                                "bearish_count": 0
+                            }
+                        all_coins[coin]["mentions"] += 1
+                        if "bullish" in analysis['indicator'].lower():
+                            all_coins[coin]["bullish_count"] += 1
+                        elif "bearish" in analysis['indicator'].lower():
+                            all_coins[coin]["bearish_count"] += 1
+            
+            statistics["coins_distribution"] = all_coins
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": yesterday,
+                    "channels": channels_list,
+                    "statistics": statistics
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_todays_channel_analysis: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
