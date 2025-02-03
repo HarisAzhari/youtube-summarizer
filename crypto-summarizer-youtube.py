@@ -3725,6 +3725,113 @@ def get_coins_by_date(date):
             "message": str(e)
         }), 500
 
+@app.route('/youtube/coin-trends')
+def get_coin_trends():
+    """Get coin mentions and sentiment trends for past 7 days, 14 days, and 1 month"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Calculate date ranges in Malaysia timezone
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            now = datetime.now(malaysia_tz)
+            
+            periods = {
+                '7d': now - timedelta(days=7),
+                '14d': now - timedelta(days=14),
+                '30d': now - timedelta(days=30)
+            }
+            
+            results = {}
+            
+            for period_name, start_date in periods.items():
+                # Convert to UTC for database query
+                start_utc = start_date.astimezone(pytz.UTC)
+                end_utc = now.astimezone(pytz.UTC)
+                
+                c.execute('''
+                    WITH video_times AS (
+                        SELECT 
+                            ca.coin_mentioned,
+                            ca.indicator,
+                            datetime(v.published_at, '+8 hours') as my_time
+                        FROM videos v
+                        JOIN coin_analysis ca ON v.video_id = ca.video_id
+                        WHERE v.published_at BETWEEN ? AND ?
+                    )
+                    SELECT *
+                    FROM video_times
+                ''', (start_utc.strftime("%Y-%m-%d %H:%M:%S"), 
+                      end_utc.strftime("%Y-%m-%d %H:%M:%S")))
+                
+                mentions = [dict(row) for row in c.fetchall()]
+                
+                # Process mentions with name overrides
+                coin_stats = {}
+                for mention in mentions:
+                    # Apply name override if exists
+                    coin_name = mention['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                    
+                    if coin_name not in coin_stats:
+                        coin_stats[coin_name] = {
+                            "bullish": 0,
+                            "bearish": 0
+                        }
+                    
+                    # Track sentiment counts only
+                    indicator = mention["indicator"].lower()
+                    if "bullish" in indicator:
+                        coin_stats[coin_name]["bullish"] += 1
+                    elif "bearish" in indicator:
+                        coin_stats[coin_name]["bearish"] += 1
+                
+                # Format to simple list
+                formatted_coins = [
+                    {
+                        "coin": name,
+                        "bullish": stats["bullish"],
+                        "bearish": stats["bearish"]
+                    }
+                    for name, stats in coin_stats.items()
+                ]
+                
+                # Sort by total mentions (bullish + bearish)
+                formatted_coins.sort(
+                    key=lambda x: (x["bullish"] + x["bearish"]), 
+                    reverse=True
+                )
+                
+                results[period_name] = formatted_coins
+
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "7_days": results['7d'],
+                    "14_days": results['14d'],
+                    "30_days": results['30d']
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_coin_trends: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 if __name__ == '__main__':
     init_db()
     app.run(port=8080, host='0.0.0.0')
