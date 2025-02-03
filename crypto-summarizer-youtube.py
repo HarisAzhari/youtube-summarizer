@@ -1374,6 +1374,18 @@ def get_light_results():
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
+            # Get ALL edit history for name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            
+            # Create a mapping of old names to new names
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
             # Get all videos except transcript field
             c.execute('''
                 SELECT 
@@ -1385,7 +1397,7 @@ def get_light_results():
             ''')
             videos = [dict(row) for row in c.fetchall()]
             
-            # Get analyses for each video
+            # Get analyses for each video and apply name overrides
             for video in videos:
                 c.execute('''
                     SELECT 
@@ -1396,8 +1408,13 @@ def get_light_results():
                 
                 analyses = []
                 for row in c.fetchall():
+                    # Apply name override if exists
+                    coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                        
                     analyses.append({
-                        'coin_mentioned': row['coin_mentioned'],
+                        'coin_mentioned': coin_name,
                         'reason': json.loads(row['reasons']),
                         'indicator': row['indicator']
                     })
@@ -3308,6 +3325,79 @@ def merge_similar_sectors(sectors: List[Dict]) -> List[Dict]:
         })
     
     return sorted(result, key=lambda x: x['mention_count'], reverse=True)
+
+@app.route('/youtube/get-light-temp')
+@cache_response(CACHE_DURATION)
+def get_light_results_with_override():
+    """Temporary endpoint to get results with coin name overrides from edit history"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get ALL edit history (not filtered by date)
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            
+            # Create a mapping of old names to new names
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Get videos only from the specified date range
+            c.execute('''
+                SELECT 
+                    id, video_id, channel_id, channel_name, 
+                    title, url, thumbnail_url, views, 
+                    duration, published_at, processed_at
+                FROM videos 
+                WHERE DATE(published_at) BETWEEN '2025-01-31' AND '2025-02-03'
+                ORDER BY processed_at DESC
+            ''')
+            videos = [dict(row) for row in c.fetchall()]
+            
+            # Get analyses and apply name overrides
+            for video in videos:
+                c.execute('''
+                    SELECT 
+                        coin_mentioned, reasons, indicator
+                    FROM coin_analysis 
+                    WHERE video_id = ?
+                ''', (video['video_id'],))
+                
+                analyses = []
+                for row in c.fetchall():
+                    # Apply name override if exists
+                    coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                        
+                    analyses.append({
+                        'coin_mentioned': coin_name,
+                        'reason': json.loads(row['reasons']),
+                        'indicator': row['indicator']
+                    })
+                video['analyses'] = analyses
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "total_videos": len(videos),
+                    "videos": videos,
+                    "cached": False,
+                    "_debug_name_mappings": name_mapping
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_light_results_with_override: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 if __name__ == '__main__':
     init_db()
