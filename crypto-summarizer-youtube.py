@@ -3654,8 +3654,11 @@ def get_coins_by_date(date):
                         "video_ids": set(),
                         "channels": set(),
                         "channel_mentions": {},
-                        "bullish_count": 0,
-                        "bearish_count": 0
+                        "sentiment_counts": {
+                            "bullish": 0,
+                            "bearish": 0,
+                            "neutral": 0
+                        }
                     }
                 
                 stats = coin_stats[coin_name]
@@ -3670,27 +3673,25 @@ def get_coins_by_date(date):
                 stats["channel_mentions"][channel] += 1
                 stats["channels"].add(channel)
                 
+                # Track sentiment counts
                 indicator = mention["indicator"].lower()
                 if "bullish" in indicator:
-                    stats["bullish_count"] += 1
+                    stats["sentiment_counts"]["bullish"] += 1
                 elif "bearish" in indicator:
-                    stats["bearish_count"] += 1
+                    stats["sentiment_counts"]["bearish"] += 1
+                else:
+                    stats["sentiment_counts"]["neutral"] += 1
 
             # Format the final response
             formatted_coins = []
             for coin_name, stats in coin_stats.items():
-                total = stats["total_mentions"]
                 formatted_coins.append({
                     "coin_mentioned": coin_name,
-                    "total_mentions": total,
+                    "total_mentions": stats["total_mentions"],
                     "unique_channel_mentions": stats["unique_mentions"],
                     "video_count": len(stats["video_ids"]),
                     "channel_count": len(stats["channels"]),
-                    "sentiment": {
-                        "bullish": round((stats["bullish_count"] / total * 100), 2),
-                        "bearish": round((stats["bearish_count"] / total * 100), 2),
-                        "neutral": round(((total - stats["bullish_count"] - stats["bearish_count"]) / total * 100), 2)
-                    },
+                    "sentiment": stats["sentiment_counts"],  # Now using raw counts instead of percentages
                     "channel_breakdown": {
                         channel: count 
                         for channel, count in stats["channel_mentions"].items()
