@@ -3563,6 +3563,167 @@ def drop_sector_analysis():
             "message": str(e)
         }), 500
 
+@app.route('/youtube/today-coins/<date>')
+def get_coins_by_date(date):
+    """Get coin mention counts for a specific date (Malaysia timezone) with edit history applied"""
+    try:
+        # Validate date format
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid date format. Please use YYYY-MM-DD"
+            }), 400
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # First get all coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Get Malaysia timezone (UTC+8)
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            
+            # Set the target date range in Malaysia time
+            start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_my = start_my.replace(hour=23, minute=59, second=59)
+            
+            # Convert to UTC for database query (subtract 8 hours since DB is in UTC)
+            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC)
+            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC)
+            
+            # Query with explicit timezone conversion in SQL
+            c.execute('''
+                WITH video_times AS (
+                    SELECT 
+                        v.video_id,
+                        v.channel_name,
+                        v.published_at,
+                        datetime(v.published_at, '+8 hours') as my_time,
+                        ca.coin_mentioned,
+                        ca.indicator
+                    FROM videos v
+                    JOIN coin_analysis ca ON v.video_id = ca.video_id
+                )
+                SELECT *
+                FROM video_times
+                WHERE date(my_time) = ?
+            ''', (date,))
+            
+            mentions = [dict(row) for row in c.fetchall()]
+            
+            if not mentions:
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "date": date,
+                        "total_unique_coins": 0,
+                        "coins": [],
+                        "metadata": {
+                            "timezone": "Asia/Kuala_Lumpur",
+                            "period": {
+                                "start": start_utc.isoformat(),
+                                "end": end_utc.isoformat()
+                            }
+                        }
+                    }
+                })
+
+            # Process mentions with name overrides
+            coin_stats = {}
+            for mention in mentions:
+                # Apply name override if exists
+                coin_name = mention['coin_mentioned']
+                if coin_name in name_mapping:
+                    coin_name = name_mapping[coin_name]
+                
+                if coin_name not in coin_stats:
+                    coin_stats[coin_name] = {
+                        "coin_mentioned": coin_name,
+                        "total_mentions": 0,
+                        "unique_mentions": 0,
+                        "video_ids": set(),
+                        "channels": set(),
+                        "channel_mentions": {},
+                        "bullish_count": 0,
+                        "bearish_count": 0
+                    }
+                
+                stats = coin_stats[coin_name]
+                stats["total_mentions"] += 1
+                stats["video_ids"].add(mention["video_id"])
+                
+                # Track channel-specific mentions
+                channel = mention["channel_name"]
+                if channel not in stats["channel_mentions"]:
+                    stats["channel_mentions"][channel] = 0
+                    stats["unique_mentions"] += 1
+                stats["channel_mentions"][channel] += 1
+                stats["channels"].add(channel)
+                
+                indicator = mention["indicator"].lower()
+                if "bullish" in indicator:
+                    stats["bullish_count"] += 1
+                elif "bearish" in indicator:
+                    stats["bearish_count"] += 1
+
+            # Format the final response
+            formatted_coins = []
+            for coin_name, stats in coin_stats.items():
+                total = stats["total_mentions"]
+                formatted_coins.append({
+                    "coin_mentioned": coin_name,
+                    "total_mentions": total,
+                    "unique_channel_mentions": stats["unique_mentions"],
+                    "video_count": len(stats["video_ids"]),
+                    "channel_count": len(stats["channels"]),
+                    "sentiment": {
+                        "bullish": round((stats["bullish_count"] / total * 100), 2),
+                        "bearish": round((stats["bearish_count"] / total * 100), 2),
+                        "neutral": round(((total - stats["bullish_count"] - stats["bearish_count"]) / total * 100), 2)
+                    },
+                    "channel_breakdown": {
+                        channel: count 
+                        for channel, count in stats["channel_mentions"].items()
+                    }
+                })
+            
+            # Sort by unique channel mentions first, then total mentions
+            formatted_coins.sort(key=lambda x: (x["unique_channel_mentions"], x["total_mentions"]), reverse=True)
+
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": date,
+                    "total_unique_coins": len(formatted_coins),
+                    "coins": formatted_coins,
+                    "metadata": {
+                        "timezone": "Asia/Kuala_Lumpur",
+                        "period": {
+                            "start": start_utc.isoformat(),
+                            "end": end_utc.isoformat()
+                        },
+                        "name_overrides_applied": len(name_mapping)
+                    }
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_coins_by_date: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 if __name__ == '__main__':
     init_db()
     app.run(port=8080, host='0.0.0.0')
