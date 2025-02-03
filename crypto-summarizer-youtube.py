@@ -3832,6 +3832,82 @@ def get_coin_trends():
             "message": str(e)
         }), 500
 
+@app.route('/youtube/coin-reasons')
+def get_all_coin_reasons():
+    """Get all reasons for all coins in the database"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Query all coins and their reasons
+            c.execute('''
+                SELECT 
+                    ca.coin_mentioned,
+                    ca.reasons
+                FROM coin_analysis ca
+                JOIN videos v ON v.video_id = ca.video_id
+                WHERE ca.reasons IS NOT NULL
+                  AND datetime(v.published_at, '+8 hours') >= datetime('now', '-30 days')
+            ''')
+            
+            results = {}
+            
+            for row in c.fetchall():
+                try:
+                    # Apply name override if exists
+                    coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                    
+                    if coin_name not in results:
+                        results[coin_name] = []
+                    
+                    # Parse and add reasons
+                    reasons = json.loads(row['reasons'])
+                    if isinstance(reasons, list):
+                        results[coin_name].extend(reasons)
+                        
+                except json.JSONDecodeError:
+                    continue
+                except Exception as e:
+                    print(f"Error processing row for {coin_name}: {str(e)}")
+                    continue
+            
+            # Convert to list format
+            formatted_results = [
+                {
+                    "coin": coin,
+                    "reasons": list(set(reasons))  # Remove duplicates
+                }
+                for coin, reasons in results.items()
+            ]
+            
+            # Sort by coin name
+            formatted_results.sort(key=lambda x: x["coin"])
+            
+            return jsonify({
+                "status": "success",
+                "data": formatted_results
+            })
+            
+    except Exception as e:
+        print(f"Error in get_all_coin_reasons: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 if __name__ == '__main__':
     init_db()
     app.run(port=8080, host='0.0.0.0')
