@@ -29,6 +29,8 @@ import os
 from typing import List, Optional,Dict, Any
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
+import traceback
+from functools import wraps
 
 app = Flask(__name__)
 CORS(app)
@@ -115,11 +117,14 @@ automation_status = {
     "last_execution": None
 }
 
+# Update cache duration to 5 hours
+CACHE_DURATION = timedelta(hours=5)
+
 def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=8, minute=38, second=0, microsecond=0)
+    next_run = now.replace(hour=8, minute=54, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -714,7 +719,7 @@ def process_channels():
             })
             
             # Configure Gemini
-            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
             model = genai.GenerativeModel(model_name="gemini-1.5-flash")
             
             # Process each channel
@@ -1036,7 +1041,7 @@ def clean_coin_names():
             coins = [row[0] for row in c.fetchall()]
             
             # Configure Gemini
-            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
             model = genai.GenerativeModel(model_name="gemini-1.5-flash")
             
             # Process coins in batches to avoid token limits
@@ -1153,7 +1158,7 @@ def analyze_mentions_type(video_id):
             mentions = list(set(row[1] for row in results))  # Get unique mentions
             
             # Configure Gemini
-            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
             model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
             prompt = f"""Analyze the given text and extract information about cryptocurrencies mentioned. Follow these rules EXACTLY:
@@ -1332,6 +1337,7 @@ def test_channel(channel_handle):
         }), 500
     
 @app.route('/youtube/get-light')
+@cache_response(CACHE_DURATION)
 def get_light_results():
     """Get all results without transcripts for lighter payload"""
     try:
@@ -1363,7 +1369,7 @@ def get_light_results():
                 for row in c.fetchall():
                     analyses.append({
                         'coin_mentioned': row['coin_mentioned'],
-                        'reason': json.loads(row['reasons']),  # Parse JSON reasons back into array
+                        'reason': json.loads(row['reasons']),
                         'indicator': row['indicator']
                     })
                 video['analyses'] = analyses
@@ -1372,16 +1378,31 @@ def get_light_results():
                 "status": "success",
                 "data": {
                     "total_videos": len(videos),
-                    "videos": videos
+                    "videos": videos,
+                    "cached": False
                 }
             })
             
     except Exception as e:
-        print(f"Error in get_light_results: {str(e)}")  # Debug print
+        print(f"Error in get_light_results: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
         }), 500
+
+# Add a cache control endpoint (optional)
+@app.route('/youtube/clear-cache')
+def clear_cache():
+    """Clear the API response cache"""
+    global _results_cache
+    _results_cache = {
+        'data': None,
+        'timestamp': None
+    }
+    return jsonify({
+        "status": "success",
+        "message": "Cache cleared successfully"
+    })
 
 # Optional: Add a new endpoint to get a single video's transcript if needed
 @app.route('/youtube/transcript/<video_id>')
@@ -1758,7 +1779,7 @@ def generate_daily_summary():
                     })
 
             # Configure Gemini for summary generation
-            genai.configure(api_key="AIzaSyAyQ4DGoHTIDWgfUE5qXl8FNYgBS3hMG_g")
+            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
             model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
             # Prepare detailed analysis for each coin
@@ -2742,6 +2763,522 @@ def get_todays_channel_analysis(date):
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/youtube/sector-analysis/<date>')
+def analyze_sectors_by_date(date):
+    """Analyze cryptocurrency sectors mentioned on a specific date"""
+    try:
+        print(f"\nStarting sector analysis for date: {date}")
+        
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get all coins and their mentions for the specified date
+            query = '''
+                SELECT 
+                    ca.coin_mentioned,
+                    ca.reasons,
+                    ca.indicator,
+                    v.channel_name,
+                    v.title,
+                    v.url
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE DATE(v.published_at) = ?
+                ORDER BY v.published_at ASC
+            '''
+            print(f"\nExecuting query for date {date}...")
+            c.execute(query, (date,))
+            
+            mentions = [dict(row) for row in c.fetchall()]
+            print(f"\nFound {len(mentions)} mentions for date {date}")
+            
+            if not mentions:
+                print(f"No data found for date: {date}")
+                return jsonify({
+                    "status": "error",
+                    "message": f"No data found for date: {date}"
+                }), 404
+
+            # Configure Gemini
+            print("\nConfiguring Gemini model...")
+            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
+            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+            
+            # Prepare data for analysis
+            print("\nPreparing analysis data...")
+            analysis_data = {
+                "date": date,
+                "mentions": []
+            }
+            
+            # Process each mention with error handling
+            for m in mentions:
+                try:
+                    mention_data = {
+                        "coin": m["coin_mentioned"],
+                        "reasons": json.loads(m["reasons"]),
+                        "indicator": m["indicator"],
+                        "source": {
+                            "channel": m["channel_name"],
+                            "title": m["title"],
+                            "url": m["url"]
+                        }
+                    }
+                    analysis_data["mentions"].append(mention_data)
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing reasons for {m['coin_mentioned']}: {str(e)}")
+                    print(f"Raw reasons data: {m['reasons']}")
+                except Exception as e:
+                    print(f"Error processing mention for {m['coin_mentioned']}: {str(e)}")
+
+            print(f"\nProcessed {len(analysis_data['mentions'])} valid mentions")
+            
+            # Create the prompt
+            prompt = """Analyze these cryptocurrency mentions and categorize them into SPECIFIC sectors.
+CRITICAL RULES:
+1. NEVER use generic categories like "Other", "Miscellaneous", or "Unclassified" - ALWAYS assign a specific sector
+2. If a coin seems unclear, analyze its use case and assign it to the most relevant specific sector
+3. ALWAYS provide detailed reasoning for EACH sector explaining why those coins belong there
+4. Be consistent with sector naming
+5. If a coin could fit multiple sectors, choose the most dominant use case
+
+Categorize into specific sectors such as:
+- AI & Machine Learning (Example coins: Fetch.ai, Ocean Protocol, SingularityNET)
+- DeFi (Example coins: Aave, Uniswap, Curve)
+- Gaming & Metaverse (Example coins: Axie Infinity, The Sandbox, Decentraland)
+- Layer 1 Blockchains (Example coins: Ethereum, Solana, Cardano)
+- Layer 2 Scaling (Example coins: Arbitrum, Optimism, Polygon)
+- Privacy Focused (Example coins: Monero, Zcash, Secret)
+- NFTs & Digital Collectibles (Example coins: Bored Ape, CryptoPunks)
+- Web3 Infrastructure (Example coins: Chainlink, Graph Protocol, Filecoin)
+- Exchange Platforms (Example coins: BNB, FTT, CRO)
+- Cross-Chain Solutions (Example coins: Polkadot, Cosmos, THORChain)
+- Decentralized Storage (Example coins: Filecoin, Arweave, Storj)
+- Social Finance (Example coins: Friend.tech, Stars Arena)
+- Green Blockchain (Example coins: IOTA, Energy Web Token)
+- IoT & Supply Chain (Example coins: VeChain, IOTA, WaltonChain)
+- Decentralized Identity (Example coins: Litentry, ONT ID)
+- Governance Tokens (Example coins: UNI, AAVE, COMP)
+
+Return a JSON response with this EXACT structure:
+{
+    "sectors": [
+        {
+            "name": "specific sector name",
+            "coins": ["coin1", "coin2"],
+            "sentiment": {
+                "bullish": number,
+                "bearish": number
+            },
+            "reasoning": "REQUIRED: Detailed explanation of why these specific coins belong in this sector. Example: 'These coins are categorized as Layer 1 because they operate their own independent blockchain networks with unique consensus mechanisms. TRX (Tron) and SUI both have their own blockchain networks, while Oasis Network provides its own layer 1 blockchain focused on privacy and scalability.'"
+        }
+    ]
+}
+
+IMPORTANT: Each sector MUST include detailed reasoning explaining why those specific coins belong in that category."""
+
+            print("\nGenerating analysis with Gemini...")
+            response = model.generate_content(prompt)
+            print("\nRaw Gemini response:")
+            print(response.text)
+            
+            # Clean and parse the response
+            clean_response = response.text.strip()
+            if clean_response.startswith('```json'):
+                clean_response = clean_response[7:]
+            if clean_response.startswith('```'):
+                clean_response = clean_response[3:]
+            if clean_response.endswith('```'):
+                clean_response = clean_response[:-3]
+            
+            print("\nCleaned response:")
+            print(clean_response)
+            
+            analysis = json.loads(clean_response.strip())
+            print("\nSuccessfully parsed JSON response")
+            
+            # Add metadata
+            analysis["metadata"] = {
+                "total_videos": len(set(m["url"] for m in mentions)),
+                "total_channels": len(set(m["channel_name"] for m in mentions)),
+                "analysis_timestamp": datetime.now().isoformat()
+            }
+            
+            print("\nAnalysis complete!")
+            return jsonify({
+                "status": "success",
+                "data": analysis
+            })
+            
+    except Exception as e:
+        print(f"\nError in sector analysis: {str(e)}")
+        print("\nFull error details:")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/weekly-sectors')
+def analyze_weekly_sectors():
+    """Analyze cryptocurrency sectors mentioned in the past 3 days"""
+    try:
+        print("\nStarting 3-day sector analysis...")
+        
+        # Calculate date range (last 3 days instead of 7)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=3)  # Changed from 7 to 3
+        
+        print(f"\nAnalyzing period: {start_date.date()} to {end_date.date()}")
+        
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get all mentions for the past 3 days
+            query = '''
+                SELECT 
+                    ca.coin_mentioned,
+                    ca.reasons,
+                    ca.indicator,
+                    v.channel_name,
+                    v.title,
+                    v.url,
+                    v.published_at
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE v.published_at >= ? AND v.published_at <= ?
+                ORDER BY v.published_at DESC
+            '''
+            c.execute(query, (start_date.isoformat(), end_date.isoformat()))
+            mentions = [dict(row) for row in c.fetchall()]
+            
+            print(f"\nFound {len(mentions)} total mentions in the past 3 days")
+            
+            if not mentions:
+                return jsonify({
+                    "status": "error",
+                    "message": "No data found for the past 3 days"
+                }), 404
+
+            # Configure Gemini
+            print("\nConfiguring Gemini model...")
+            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
+            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+            
+            # Process in chunks of 50 mentions
+            CHUNK_SIZE = 50
+            chunks = [mentions[i:i + CHUNK_SIZE] for i in range(0, len(mentions), CHUNK_SIZE)]
+            
+            print(f"\nProcessing {len(chunks)} chunks of data...")
+            
+            # Store all sector analyses
+            all_sectors = {}
+            
+            for chunk_index, chunk in enumerate(chunks):
+                while True:  # Keep trying if we hit rate limits
+                    try:
+                        print(f"\n{'='*50}")
+                        print(f"PROCESSING CHUNK {chunk_index + 1} OF {len(chunks)}")
+                        print(f"{'='*50}")
+                        
+                        # Prepare chunk data
+                        chunk_data = {
+                            "mentions": []
+                        }
+                        
+                        for m in chunk:
+                            try:
+                                chunk_data["mentions"].append({
+                                    "coin": m["coin_mentioned"],
+                                    "reasons": json.loads(m["reasons"]),
+                                    "indicator": m["indicator"],
+                                    "source": {
+                                        "channel": m["channel_name"],
+                                        "title": m["title"],
+                                        "url": m["url"]
+                                    }
+                                })
+                            except Exception as e:
+                                print(f"Error processing mention: {str(e)}")
+                                continue
+                        
+                        print(f"\nProcessed {len(chunk_data['mentions'])} valid mentions in chunk")
+                        print("Sample coins in this chunk:")
+                        for mention in chunk_data['mentions'][:5]:  # Show first 5 coins
+                            print(f"- {mention['coin']}")
+                        
+                        prompt = """Analyze these cryptocurrency mentions and categorize them into SPECIFIC sectors.
+CRITICAL RULES:
+1. NEVER use generic categories like "Other", "Miscellaneous", or "Unclassified" - ALWAYS assign a specific sector
+2. If a coin seems unclear, analyze its use case and assign it to the most relevant specific sector
+3. ALWAYS provide detailed reasoning for EACH sector explaining why those coins belong there
+4. Be consistent with sector naming
+5. If a coin could fit multiple sectors, choose the most dominant use case
+
+Categorize into specific sectors such as:
+- AI & Machine Learning (Example coins: Fetch.ai, Ocean Protocol, SingularityNET)
+- DeFi (Example coins: Aave, Uniswap, Curve)
+- Gaming & Metaverse (Example coins: Axie Infinity, The Sandbox, Decentraland)
+- Layer 1 Blockchains (Example coins: Ethereum, Solana, Cardano)
+- Layer 2 Scaling (Example coins: Arbitrum, Optimism, Polygon)
+- Privacy Focused (Example coins: Monero, Zcash, Secret)
+- NFTs & Digital Collectibles (Example coins: Bored Ape, CryptoPunks)
+- Web3 Infrastructure (Example coins: Chainlink, Graph Protocol, Filecoin)
+- Exchange Platforms (Example coins: BNB, FTT, CRO)
+- Cross-Chain Solutions (Example coins: Polkadot, Cosmos, THORChain)
+- Decentralized Storage (Example coins: Filecoin, Arweave, Storj)
+- Social Finance (Example coins: Friend.tech, Stars Arena)
+- Green Blockchain (Example coins: IOTA, Energy Web Token)
+- IoT & Supply Chain (Example coins: VeChain, IOTA, WaltonChain)
+- Decentralized Identity (Example coins: Litentry, ONT ID)
+- Governance Tokens (Example coins: UNI, AAVE, COMP)
+
+Return a JSON response with this EXACT structure:
+{
+    "sectors": [
+        {
+            "name": "specific sector name",
+            "coins": ["coin1", "coin2"],
+            "sentiment": {
+                "bullish": number,
+                "bearish": number
+            },
+            "reasoning": "REQUIRED: Detailed explanation of why these specific coins belong in this sector. Example: 'These coins are categorized as Layer 1 because they operate their own independent blockchain networks with unique consensus mechanisms. TRX (Tron) and SUI both have their own blockchain networks, while Oasis Network provides its own layer 1 blockchain focused on privacy and scalability.'"
+        }
+    ]
+}
+
+IMPORTANT: Each sector MUST include detailed reasoning explaining why those specific coins belong in that category."""
+                        
+                        print("\nSending to Gemini for analysis...")
+                        response = model.generate_content(prompt + "\n\nData to analyze:\n" + json.dumps(chunk_data, indent=2))
+                        
+                        # Print the raw response
+                        print("\nRAW GEMINI RESPONSE:")
+                        print(response.text)
+                        
+                        # Try to parse the response
+                        try:
+                            clean_response = response.text.strip()
+                            if clean_response.startswith('```json'):
+                                clean_response = clean_response[7:]
+                            if clean_response.startswith('```'):
+                                clean_response = clean_response[3:]
+                            if clean_response.endswith('```'):
+                                clean_response = clean_response[:-3]
+                            
+                            print("\nCLEANED RESPONSE:")
+                            print(clean_response)
+                            
+                            # Parse JSON and aggregate data into all_sectors
+                            parsed_response = json.loads(clean_response)
+                            
+                            # Aggregate the sectors data
+                            for sector in parsed_response['sectors']:
+                                sector_name = sector['name']
+                                if sector_name not in all_sectors:
+                                    all_sectors[sector_name] = {
+                                        "mention_count": 0,
+                                        "sentiment": {"bullish": 0, "bearish": 0},
+                                        "coins": set()  # Using set to avoid duplicates
+                                    }
+                                
+                                # Update the aggregated data
+                                all_sectors[sector_name]["mention_count"] += (
+                                    sector['sentiment']['bullish'] + 
+                                    sector['sentiment']['bearish']
+                                )
+                                all_sectors[sector_name]["sentiment"]["bullish"] += sector['sentiment']['bullish']
+                                all_sectors[sector_name]["sentiment"]["bearish"] += sector['sentiment']['bearish']
+                                all_sectors[sector_name]["coins"].update(sector['coins'])
+                            
+                            print("\nSuccessfully aggregated chunk data!")
+                            
+                        except Exception as parse_error:
+                            print(f"\nERROR PARSING RESPONSE: {str(parse_error)}")
+                            print("Full response that failed to parse:")
+                            print(clean_response)
+                            continue
+                        
+                        print("\nSuccessfully processed chunk!")
+                        break
+                        
+                    except Exception as e:
+                        if "429" in str(e) or "Resource has been exhausted" in str(e):
+                            for retry_count in range(3):  # Try 3 times before giving up
+                                print(f"\nRate limit hit. Attempt {retry_count + 1}/3: Waiting 60 seconds...")
+                                time.sleep(60)
+                                try:
+                                    print("Retrying request...")
+                                    response = model.generate_content(prompt + "\n\nData to analyze:\n" + json.dumps(chunk_data, indent=2))
+                                    print("Retry successful!")
+                                    break
+                                except Exception as retry_e:
+                                    if retry_count == 2:  # Last attempt failed
+                                        print("All retry attempts failed. Moving to next chunk.")
+                                        break
+                                    if "429" not in str(retry_e) and "Resource has been exhausted" not in str(retry_e):
+                                        print(f"Different error occurred: {str(retry_e)}")
+                                        break
+                                    print("Rate limit still in effect...")
+                            continue
+                        else:
+                            print(f"\nUnexpected error processing chunk {chunk_index + 1}: {str(e)}")
+                            traceback.print_exc()
+                            break  # Exit the retry loop for non-rate-limit errors
+            
+            # After ALL chunks are processed, prepare the final response
+            if not all_sectors:
+                return jsonify({
+                    "status": "error",
+                    "message": "Failed to process any chunks successfully"
+                }), 500
+            
+            # Convert aggregated data to final format
+            total_mentions = sum(s["mention_count"] for s in all_sectors.values())
+            
+            final_sectors = []
+            for sector_name, sector_data in all_sectors.items():
+                try:
+                    final_sectors.append({
+                        "name": sector_name,
+                        "mention_count": sector_data["mention_count"],
+                        "percentage": round((sector_data["mention_count"] / total_mentions * 100), 2),
+                        "sentiment": {
+                            "bullish": round((sector_data["sentiment"]["bullish"] / sector_data["mention_count"] * 100), 2),
+                            "bearish": round((sector_data["sentiment"]["bearish"] / sector_data["mention_count"] * 100), 2)
+                        },
+                        "top_coins": list(sector_data["coins"])[:5]  # Top 5 coins per sector
+                    })
+                except Exception as e:
+                    print(f"Error processing sector {sector_name}: {str(e)}")
+                    continue
+            
+            # Sort sectors by mention count
+            final_sectors.sort(key=lambda x: x["mention_count"], reverse=True)
+            
+            analysis = {
+                "period": {
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat()
+                },
+                "total_mentions": total_mentions,
+                "sectors": final_sectors,
+                "metadata": {
+                    "total_videos": len(set(m["url"] for m in mentions)),
+                    "total_channels": len(set(m["channel_name"] for m in mentions)),
+                    "analysis_timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            print("\nAll chunks processed successfully!")
+            print(f"Total sectors identified: {len(final_sectors)}")
+            print("Final sectors:")
+            for sector in final_sectors:
+                print(f"- {sector['name']}: {sector['mention_count']} mentions ({sector['percentage']}%)")
+            
+            return jsonify({
+                "status": "success",
+                "data": analysis
+            })
+            
+    except Exception as e:
+        print(f"\nError in weekly sector analysis: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+def weekly_analysis(prompt):  # Add prompt parameter
+    api_keys = [
+        "AIzaSyD2uaGDT5swFpWBLEKZhCnwAozJ8KrFtV4",
+        "AIzaSyBVaovh2Cz9LU7gUJ_ft00UBEv26_vaaC0",
+        "AIzaSyDU3yl8ZGdXUFN6rN2uKnl8dKuwwDQUdXg"
+    ]
+    current_key_index = 0
+    max_retries = len(api_keys)
+    retry_count = 0
+
+    while retry_count < max_retries:
+        try:
+            # Configure Gemini with current API key
+            genai.configure(api_key=api_keys[current_key_index])
+            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+            
+            # Your existing weekly analysis code here
+            response = model.generate_content(prompt)
+            return jsonify({"response": response.text})
+
+        except Exception as e:
+            error_message = str(e).lower()
+            if "resource exhausted" in error_message:
+                print(f"API key {current_key_index + 1} exhausted, switching to next key...")
+                current_key_index = (current_key_index + 1) % len(api_keys)
+                retry_count += 1
+            else:
+                # If it's a different error, raise it
+                raise e
+
+    # If all API keys are exhausted, wait 60 seconds
+    print("All API keys exhausted. Waiting 60 seconds...")
+    time.sleep(60)
+    
+    # Try again with the first API key after waiting
+    genai.configure(api_key=api_keys[0])
+    model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+    response = model.generate_content(prompt)
+    return jsonify({"response": response.text})
+
+def merge_similar_sectors(sectors: List[Dict]) -> List[Dict]:
+    """Merge sectors with the same normalized names"""
+    merged = {}
+    
+    for sector in sectors:
+        name = sector['name']
+        if name not in merged:
+            merged[name] = {
+                'name': name,
+                'mention_count': 0,
+                'sentiment': {'bullish': 0, 'bearish': 0},
+                'top_coins': set(),
+                'reasoning': sector.get('reasoning', '')  # Add reasoning field
+            }
+        
+        # Merge data
+        merged[name]['mention_count'] += sector['mention_count']
+        merged[name]['sentiment']['bullish'] += sector['sentiment']['bullish'] * sector['mention_count'] / 100
+        merged[name]['sentiment']['bearish'] += sector['sentiment']['bearish'] * sector['mention_count'] / 100
+        merged[name]['top_coins'].update(sector['top_coins'])
+        
+        # Combine reasoning if different
+        if sector.get('reasoning') and sector['reasoning'] != merged[name]['reasoning']:
+            merged[name]['reasoning'] = f"{merged[name]['reasoning']} | {sector['reasoning']}".strip(' |')
+    
+    # Calculate final percentages and format response
+    result = []
+    total_mentions = sum(s['mention_count'] for s in merged.values())
+    
+    for sector in merged.values():
+        total_sector_mentions = sector['mention_count']
+        result.append({
+            'name': sector['name'],
+            'mention_count': total_sector_mentions,
+            'percentage': round((total_sector_mentions / total_mentions * 100), 2),
+            'sentiment': {
+                'bullish': round((sector['sentiment']['bullish'] / total_sector_mentions * 100), 2),
+                'bearish': round((sector['sentiment']['bearish'] / total_sector_mentions * 100), 2)
+            },
+            'top_coins': list(sector['top_coins'])[:5],  # Keep top 5 coins
+            'reasoning': sector['reasoning']  # Include reasoning in final output
+        })
+    
+    return sorted(result, key=lambda x: x['mention_count'], reverse=True)
 
 if __name__ == '__main__':
     init_db()
