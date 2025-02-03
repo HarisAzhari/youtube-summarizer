@@ -120,6 +120,35 @@ automation_status = {
 # Update cache duration to 5 hours
 CACHE_DURATION = timedelta(hours=5)
 
+# Add these near the top of the file, after the imports but before the routes
+_results_cache = {
+    'data': None,
+    'timestamp': None
+}
+
+def cache_response(duration):
+    """Decorator to cache API responses"""
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            # Check if we have a valid cached response
+            now = datetime.now()
+            if (_results_cache['data'] is not None and 
+                _results_cache['timestamp'] is not None and
+                now - _results_cache['timestamp'] < duration):
+                return _results_cache['data']
+            
+            # Get fresh response
+            response = f(*args, **kwargs)
+            
+            # Cache the response
+            _results_cache['data'] = response
+            _results_cache['timestamp'] = now
+            
+            return response
+        return wrapper
+    return decorator
+
 def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
