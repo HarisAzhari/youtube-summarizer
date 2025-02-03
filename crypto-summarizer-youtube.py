@@ -2687,11 +2687,9 @@ def get_coin_mentions():
 
 @app.route('/youtube/today-analysis/<date>')
 def get_todays_channel_analysis(date):
-    """Get channel analysis for a specific date in Malaysia timezone (UTC+8)"""
     try:
         # Validate date format
         try:
-            # Parse the input date (expecting YYYY-MM-DD format)
             target_date = datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             return jsonify({
@@ -2702,6 +2700,16 @@ def get_todays_channel_analysis(date):
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
+            
+            # First get all coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
             
             # Get Malaysia timezone (UTC+8)
             malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
@@ -2755,20 +2763,24 @@ def get_todays_channel_analysis(date):
                     }
                 })
             
-            # Format the response
+            # Format the response with name overrides
             reasons = []
             coins_mentioned = set()
             
             for row in rows:
                 try:
-                    # Parse the reasons JSON string
                     parsed_reasons = json.loads(row['reasons'])
-                    coins_mentioned.add(row['coin_mentioned'])
                     
-                    # Create a reason entry for each individual reason
+                    # Apply name override if exists
+                    coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                    
+                    coins_mentioned.add(coin_name)
+                    
                     for reason in parsed_reasons:
                         reasons.append({
-                            "coin": row['coin_mentioned'],
+                            "coin": coin_name,  # Use the overridden name
                             "reason": reason,
                             "sentiment": row['indicator'],
                             "source": {
@@ -2805,6 +2817,8 @@ def get_todays_channel_analysis(date):
             
     except Exception as e:
         print(f"Error in get_todays_channel_analysis: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
@@ -2970,21 +2984,28 @@ IMPORTANT: Each sector MUST include detailed reasoning explaining why those spec
 
 @app.route('/youtube/weekly-sectors')
 def analyze_weekly_sectors():
-    """Analyze cryptocurrency sectors mentioned in the past 3 days"""
     try:
-        print("\nStarting 3-day sector analysis...")
+        print("\nStarting 7-day sector analysis...")
         
         # Calculate date range (last 3 days instead of 7)
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=3)  # Changed from 7 to 3
+        start_date = end_date - timedelta(days=7)
         
         print(f"\nAnalyzing period: {start_date.date()} to {end_date.date()}")
+        
+        # Get all Gemini API keys from environment
+        gemini_keys = [
+            os.getenv('GEMINI_API_KEY_1'),
+            os.getenv('GEMINI_API_KEY_2'),
+            os.getenv('GEMINI_API_KEY_3'),
+            os.getenv('GEMINI_API_KEY_4')
+        ]
+        current_key_index = 0
         
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # Get all mentions for the past 3 days
             query = '''
                 SELECT 
                     ca.coin_mentioned,
@@ -3010,28 +3031,30 @@ def analyze_weekly_sectors():
                     "message": "No data found for the past 3 days"
                 }), 404
 
-            # Configure Gemini
+            def get_next_key():
+                nonlocal current_key_index
+                key = gemini_keys[current_key_index]
+                current_key_index = (current_key_index + 1) % len(gemini_keys)
+                return key
+
             print("\nConfiguring Gemini model...")
-            genai.configure(api_key=os.getenv('GEMINI_API_KEY_1'))
+            genai.configure(api_key=get_next_key())
             model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
-            # Process in chunks of 50 mentions
             CHUNK_SIZE = 50
             chunks = [mentions[i:i + CHUNK_SIZE] for i in range(0, len(mentions), CHUNK_SIZE)]
             
             print(f"\nProcessing {len(chunks)} chunks of data...")
             
-            # Store all sector analyses
             all_sectors = {}
             
             for chunk_index, chunk in enumerate(chunks):
-                while True:  # Keep trying if we hit rate limits
+                while True:
                     try:
                         print(f"\n{'='*50}")
                         print(f"PROCESSING CHUNK {chunk_index + 1} OF {len(chunks)}")
                         print(f"{'='*50}")
                         
-                        # Prepare chunk data
                         chunk_data = {
                             "mentions": []
                         }
@@ -3054,7 +3077,7 @@ def analyze_weekly_sectors():
                         
                         print(f"\nProcessed {len(chunk_data['mentions'])} valid mentions in chunk")
                         print("Sample coins in this chunk:")
-                        for mention in chunk_data['mentions'][:5]:  # Show first 5 coins
+                        for mention in chunk_data['mentions'][:5]:
                             print(f"- {mention['coin']}")
                         
                         prompt = """Analyze these cryptocurrency mentions and categorize them into SPECIFIC sectors.
@@ -3093,21 +3116,17 @@ Return a JSON response with this EXACT structure:
                 "bullish": number,
                 "bearish": number
             },
-            "reasoning": "REQUIRED: Detailed explanation of why these specific coins belong in this sector. Example: 'These coins are categorized as Layer 1 because they operate their own independent blockchain networks with unique consensus mechanisms. TRX (Tron) and SUI both have their own blockchain networks, while Oasis Network provides its own layer 1 blockchain focused on privacy and scalability.'"
+            "reasoning": "REQUIRED: Detailed explanation of why these specific coins belong in this sector"
         }
     ]
-}
-
-IMPORTANT: Each sector MUST include detailed reasoning explaining why those specific coins belong in that category."""
+}"""
                         
                         print("\nSending to Gemini for analysis...")
                         response = model.generate_content(prompt + "\n\nData to analyze:\n" + json.dumps(chunk_data, indent=2))
                         
-                        # Print the raw response
                         print("\nRAW GEMINI RESPONSE:")
                         print(response.text)
                         
-                        # Try to parse the response
                         try:
                             clean_response = response.text.strip()
                             if clean_response.startswith('```json'):
@@ -3120,20 +3139,17 @@ IMPORTANT: Each sector MUST include detailed reasoning explaining why those spec
                             print("\nCLEANED RESPONSE:")
                             print(clean_response)
                             
-                            # Parse JSON and aggregate data into all_sectors
                             parsed_response = json.loads(clean_response)
                             
-                            # Aggregate the sectors data
                             for sector in parsed_response['sectors']:
                                 sector_name = sector['name']
                                 if sector_name not in all_sectors:
                                     all_sectors[sector_name] = {
                                         "mention_count": 0,
                                         "sentiment": {"bullish": 0, "bearish": 0},
-                                        "coins": set()  # Using set to avoid duplicates
+                                        "coins": set()
                                     }
                                 
-                                # Update the aggregated data
                                 all_sectors[sector_name]["mention_count"] += (
                                     sector['sentiment']['bullish'] + 
                                     sector['sentiment']['bearish']
@@ -3155,36 +3171,21 @@ IMPORTANT: Each sector MUST include detailed reasoning explaining why those spec
                         
                     except Exception as e:
                         if "429" in str(e) or "Resource has been exhausted" in str(e):
-                            for retry_count in range(3):  # Try 3 times before giving up
-                                print(f"\nRate limit hit. Attempt {retry_count + 1}/3: Waiting 60 seconds...")
-                                time.sleep(60)
-                                try:
-                                    print("Retrying request...")
-                                    response = model.generate_content(prompt + "\n\nData to analyze:\n" + json.dumps(chunk_data, indent=2))
-                                    print("Retry successful!")
-                                    break
-                                except Exception as retry_e:
-                                    if retry_count == 2:  # Last attempt failed
-                                        print("All retry attempts failed. Moving to next chunk.")
-                                        break
-                                    if "429" not in str(retry_e) and "Resource has been exhausted" not in str(retry_e):
-                                        print(f"Different error occurred: {str(retry_e)}")
-                                        break
-                                    print("Rate limit still in effect...")
+                            print(f"API key exhausted, switching to next key...")
+                            genai.configure(api_key=get_next_key())
+                            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
                             continue
                         else:
                             print(f"\nUnexpected error processing chunk {chunk_index + 1}: {str(e)}")
                             traceback.print_exc()
-                            break  # Exit the retry loop for non-rate-limit errors
+                            break
             
-            # After ALL chunks are processed, prepare the final response
             if not all_sectors:
                 return jsonify({
                     "status": "error",
                     "message": "Failed to process any chunks successfully"
                 }), 500
             
-            # Convert aggregated data to final format
             total_mentions = sum(s["mention_count"] for s in all_sectors.values())
             
             final_sectors = []
@@ -3198,13 +3199,12 @@ IMPORTANT: Each sector MUST include detailed reasoning explaining why those spec
                             "bullish": round((sector_data["sentiment"]["bullish"] / sector_data["mention_count"] * 100), 2),
                             "bearish": round((sector_data["sentiment"]["bearish"] / sector_data["mention_count"] * 100), 2)
                         },
-                        "top_coins": list(sector_data["coins"])[:5]  # Top 5 coins per sector
+                        "top_coins": list(sector_data["coins"])[:5]
                     })
                 except Exception as e:
                     print(f"Error processing sector {sector_name}: {str(e)}")
                     continue
             
-            # Sort sectors by mention count
             final_sectors.sort(key=lambda x: x["mention_count"], reverse=True)
             
             analysis = {
@@ -3220,12 +3220,84 @@ IMPORTANT: Each sector MUST include detailed reasoning explaining why those spec
                     "analysis_timestamp": datetime.now().isoformat()
                 }
             }
-            
-            print("\nAll chunks processed successfully!")
-            print(f"Total sectors identified: {len(final_sectors)}")
-            print("Final sectors:")
-            for sector in final_sectors:
-                print(f"- {sector['name']}: {sector['mention_count']} mentions ({sector['percentage']}%)")
+
+            # Store in memory cache before database insertion
+            app.last_sector_analysis = analysis
+
+            # Then try database insertion
+            try:
+                with sqlite3.connect(DB_PATH) as conn:
+                    c = conn.cursor()
+                    
+                    # Check if table exists
+                    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sector_analysis'")
+                    table_exists = c.fetchone() is not None
+                    
+                    if table_exists:
+                        # Get current columns
+                        c.execute("PRAGMA table_info(sector_analysis)")
+                        columns = [column[1] for column in c.fetchall()]
+                        
+                        # If analysis_date column doesn't exist, add it
+                        if 'analysis_date' not in columns:
+                            c.execute('ALTER TABLE sector_analysis ADD COLUMN analysis_date TEXT')
+                        
+                        # Add any other missing columns
+                        required_columns = {
+                            'start_date': 'TEXT',
+                            'end_date': 'TEXT',
+                            'total_mentions': 'INTEGER',
+                            'total_videos': 'INTEGER',
+                            'total_channels': 'INTEGER',
+                            'sectors_data': 'TEXT',
+                            'created_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+                        }
+                        
+                        for col_name, col_type in required_columns.items():
+                            if col_name not in columns:
+                                c.execute(f'ALTER TABLE sector_analysis ADD COLUMN {col_name} {col_type}')
+                    else:
+                        # Create new table with all required columns
+                        c.execute('''
+                            CREATE TABLE sector_analysis (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                analysis_date TEXT,
+                                start_date TEXT,
+                                end_date TEXT,
+                                total_mentions INTEGER,
+                                total_videos INTEGER,
+                                total_channels INTEGER,
+                                sectors_data TEXT,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )
+                        ''')
+                    
+                    # Insert the analysis results
+                    c.execute('''
+                        INSERT INTO sector_analysis (
+                            analysis_date,
+                            start_date,
+                            end_date,
+                            total_mentions,
+                            total_videos,
+                            total_channels,
+                            sectors_data
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        datetime.now().isoformat(),
+                        analysis['period']['start'],
+                        analysis['period']['end'],
+                        analysis['total_mentions'],
+                        analysis['metadata']['total_videos'],
+                        analysis['metadata']['total_channels'],
+                        json.dumps(analysis['sectors'])
+                    ))
+                    conn.commit()
+                    print("\nAnalysis results stored in database successfully!")
+                    
+            except Exception as db_error:
+                print(f"\nError handling database: {str(db_error)}")
+                traceback.print_exc()
             
             return jsonify({
                 "status": "success",
@@ -3394,6 +3466,98 @@ def get_light_results_with_override():
             
     except Exception as e:
         print(f"Error in get_light_results_with_override: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/get-sector-analysis', methods=['GET'])
+def get_sector_analysis():
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # First try to get from database
+            try:
+                c.execute('''
+                    SELECT 
+                        analysis_date,
+                        period_start,  # Changed from start_date
+                        period_end,    # Changed from end_date
+                        total_mentions,
+                        total_videos,
+                        total_channels,
+                        sectors_data,
+                        created_at
+                    FROM sector_analysis
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ''')
+                
+                result = c.fetchone()
+                
+                if result:
+                    analysis = {
+                        "analysis_date": result['analysis_date'],
+                        "period": {
+                            "start": result['period_start'],
+                            "end": result['period_end']
+                        },
+                        "total_mentions": result['total_mentions'],
+                        "metadata": {
+                            "total_videos": result['total_videos'],
+                            "total_channels": result['total_channels'],
+                            "created_at": result['created_at']
+                        },
+                        "sectors": json.loads(result['sectors_data'])
+                    }
+                    
+                    return jsonify({
+                        "status": "success",
+                        "source": "database",
+                        "data": analysis
+                    })
+                    
+            except sqlite3.OperationalError as e:
+                print(f"Database error: {str(e)}")
+                
+            # If database retrieval fails, try to get from memory cache
+            # (You'll need to add this variable at the top of your file)
+            if hasattr(app, 'last_sector_analysis'):
+                return jsonify({
+                    "status": "success",
+                    "source": "memory",
+                    "data": app.last_sector_analysis
+                })
+            
+            return jsonify({
+                "status": "error",
+                "message": "No sector analysis data found in database or memory"
+            }), 404
+            
+    except Exception as e:
+        print(f"Error retrieving sector analysis: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/drop-sector-analysis', methods=['POST'])
+def drop_sector_analysis():
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute('DROP TABLE IF EXISTS sector_analysis')
+            conn.commit()
+            
+            return jsonify({
+                "status": "success",
+                "message": "sector_analysis table dropped successfully"
+            })
+            
+    except Exception as e:
+        print(f"Error dropping table: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
