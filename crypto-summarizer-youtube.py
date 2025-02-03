@@ -748,8 +748,8 @@ def process_channels():
             })
             
             # Configure Gemini
-            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
-            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+            genai.configure(api_key=os.getenv('GEMINI_API_KEY_1'))
+            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
             # Process each channel
             for handle in ALL_CHANNELS:
@@ -1808,7 +1808,7 @@ def generate_daily_summary():
                     })
 
             # Configure Gemini for summary generation
-            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
+            genai.configure(api_key=os.getenv('GEMINI_API_KEY_1'))
             model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
             # Prepare detailed analysis for each coin
@@ -2832,7 +2832,7 @@ def analyze_sectors_by_date(date):
 
             # Configure Gemini
             print("\nConfiguring Gemini model...")
-            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
+            genai.configure(api_key=os.getenv('GEMINI_API_KEY_1'))
             model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
             # Prepare data for analysis
@@ -2995,7 +2995,7 @@ def analyze_weekly_sectors():
 
             # Configure Gemini
             print("\nConfiguring Gemini model...")
-            genai.configure(api_key="AIzaSyBks3X3tJ5md4vr_iRl5J9vi-DTjkjzQx8")
+            genai.configure(api_key=os.getenv('GEMINI_API_KEY_1'))
             model = genai.GenerativeModel(model_name="gemini-1.5-pro")
             
             # Process in chunks of 50 mentions
