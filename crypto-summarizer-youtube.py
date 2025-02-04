@@ -153,7 +153,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=8, minute=54, second=0, microsecond=0)
+    next_run = now.replace(hour=7, minute=5, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3727,7 +3727,7 @@ def get_coins_by_date(date):
 
 @app.route('/youtube/coin-trends')
 def get_coin_trends():
-    """Get coin mentions and sentiment trends for past 7 days, 14 days, and 1 month"""
+    """Get all historical coin mentions with sentiment counts (Malaysia timezone)"""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -3743,86 +3743,60 @@ def get_coin_trends():
             ''')
             name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
             
-            # Calculate date ranges in Malaysia timezone
-            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
-            now = datetime.now(malaysia_tz)
-            
-            periods = {
-                '7d': now - timedelta(days=7),
-                '14d': now - timedelta(days=14),
-                '30d': now - timedelta(days=30)
-            }
+            # Query with Malaysia timezone adjustment
+            c.execute('''
+                SELECT 
+                    date(datetime(v.published_at, '+8 hours')) as my_date,
+                    ca.coin_mentioned,
+                    ca.indicator
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+                ORDER BY my_date DESC
+            ''')
             
             results = {}
             
-            for period_name, start_date in periods.items():
-                # Convert to UTC for database query
-                start_utc = start_date.astimezone(pytz.UTC)
-                end_utc = now.astimezone(pytz.UTC)
+            for row in c.fetchall():
+                date = row['my_date']
                 
-                c.execute('''
-                    WITH video_times AS (
-                        SELECT 
-                            ca.coin_mentioned,
-                            ca.indicator,
-                            datetime(v.published_at, '+8 hours') as my_time
-                        FROM videos v
-                        JOIN coin_analysis ca ON v.video_id = ca.video_id
-                        WHERE v.published_at BETWEEN ? AND ?
-                    )
-                    SELECT *
-                    FROM video_times
-                ''', (start_utc.strftime("%Y-%m-%d %H:%M:%S"), 
-                      end_utc.strftime("%Y-%m-%d %H:%M:%S")))
+                # Apply name override if exists
+                coin_name = row['coin_mentioned']
+                if coin_name in name_mapping:
+                    coin_name = name_mapping[coin_name]
                 
-                mentions = [dict(row) for row in c.fetchall()]
+                if date not in results:
+                    results[date] = {}
                 
-                # Process mentions with name overrides
-                coin_stats = {}
-                for mention in mentions:
-                    # Apply name override if exists
-                    coin_name = mention['coin_mentioned']
-                    if coin_name in name_mapping:
-                        coin_name = name_mapping[coin_name]
-                    
-                    if coin_name not in coin_stats:
-                        coin_stats[coin_name] = {
-                            "bullish": 0,
-                            "bearish": 0
-                        }
-                    
-                    # Track sentiment counts only
-                    indicator = mention["indicator"].lower()
-                    if "bullish" in indicator:
-                        coin_stats[coin_name]["bullish"] += 1
-                    elif "bearish" in indicator:
-                        coin_stats[coin_name]["bearish"] += 1
-                
-                # Format to simple list
-                formatted_coins = [
-                    {
-                        "coin": name,
-                        "bullish": stats["bullish"],
-                        "bearish": stats["bearish"]
+                if coin_name not in results[date]:
+                    results[date][coin_name] = {
+                        "bullish": 0,
+                        "bearish": 0
                     }
-                    for name, stats in coin_stats.items()
-                ]
                 
-                # Sort by total mentions (bullish + bearish)
-                formatted_coins.sort(
-                    key=lambda x: (x["bullish"] + x["bearish"]), 
-                    reverse=True
-                )
-                
-                results[period_name] = formatted_coins
-
+                # Count sentiments
+                indicator = row['indicator'].lower()
+                if "bullish" in indicator:
+                    results[date][coin_name]["bullish"] += 1
+                elif "bearish" in indicator:
+                    results[date][coin_name]["bearish"] += 1
+            
+            # Format the response
+            formatted_results = []
+            for date in results:
+                for coin in results[date]:
+                    formatted_results.append({
+                        "date": date,
+                        "coin": coin,
+                        "bullish": results[date][coin]["bullish"],
+                        "bearish": results[date][coin]["bearish"]
+                    })
+            
+            # Sort by date (newest first) and then by coin name
+            formatted_results.sort(key=lambda x: (x["date"], x["coin"]), reverse=True)
+            
             return jsonify({
                 "status": "success",
-                "data": {
-                    "7_days": results['7d'],
-                    "14_days": results['14d'],
-                    "30_days": results['30d']
-                }
+                "data": formatted_results
             })
             
     except Exception as e:
