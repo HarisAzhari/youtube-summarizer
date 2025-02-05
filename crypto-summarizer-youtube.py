@@ -33,7 +33,16 @@ import traceback
 from functools import wraps
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://admin.moometrics.io",
+            "http://localhost:*"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # Configuration
 DB_PATH = 'youtube_crypto.db'
@@ -153,7 +162,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=7, minute=5, second=0, microsecond=0)
+    next_run = now.replace(hour=10, minute=5, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3743,15 +3752,25 @@ def get_coin_trends():
             ''')
             name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
             
-            # Query with Malaysia timezone adjustment
+            # Query with explicit timezone conversion in SQL
             c.execute('''
+                WITH video_times AS (
+                    SELECT 
+                        v.video_id,
+                        v.channel_name,
+                        v.published_at,
+                        datetime(v.published_at, '+8 hours') as my_time,
+                        ca.coin_mentioned,
+                        ca.indicator
+                    FROM videos v
+                    JOIN coin_analysis ca ON v.video_id = ca.video_id
+                )
                 SELECT 
-                    date(datetime(v.published_at, '+8 hours')) as my_date,
-                    ca.coin_mentioned,
-                    ca.indicator
-                FROM videos v
-                JOIN coin_analysis ca ON v.video_id = ca.video_id
-                ORDER BY my_date DESC
+                    date(my_time) as my_date,
+                    coin_mentioned,
+                    indicator
+                FROM video_times
+                ORDER BY my_date DESC, coin_mentioned
             ''')
             
             results = {}
