@@ -36,7 +36,7 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
         "origins": [
-            "https://admin.moometrics.io",
+            "https://admin.moometrics.io/news",
             "http://localhost:*"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
