@@ -38,6 +38,7 @@ CORS(app, resources={
         "origins": [
             "https://admin.moometrics.io",  # Admin frontend
             "https://api.moometrics.io",    # API domain
+            "https://moometrics.io",        # Main domain
             "http://localhost:*"            # Local development
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
