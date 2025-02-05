@@ -36,11 +36,14 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
         "origins": [
-            "https://admin.moometrics.io/news",
-            "http://localhost:*"
+            "https://admin.moometrics.io",  # Admin frontend
+            "https://api.moometrics.io",    # API domain
+            "http://localhost:*"            # Local development
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True,       # Add this for credentials support
+        "expose_headers": ["Content-Type", "Authorization"]  # Expose necessary headers
     }
 })
 
