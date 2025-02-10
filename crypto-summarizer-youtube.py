@@ -2771,11 +2771,6 @@ def get_todays_channel_analysis(date):
             coins_mentioned = set()
             
             for row in rows:
-                # Check if the published_at date matches the requested date
-                published_date = row['published_at'].date()
-                if published_date != target_date.date():
-                    continue  # Skip this entry if the date does not match
-                
                 try:
                     parsed_reasons = json.loads(row['reasons'])
                     coin_name = row['coin_mentioned']
