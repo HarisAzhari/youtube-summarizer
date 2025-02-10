@@ -2703,7 +2703,7 @@ def get_todays_channel_analysis(date):
     try:
         # Validate date format
         try:
-            target_date = datetime.strptime(date, "%Y-%m-%d").date()  # Keep only the date part
+            target_date = datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             return jsonify({
                 "status": "error",
@@ -2714,25 +2714,41 @@ def get_todays_channel_analysis(date):
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # Fetch all video analyses
+            # Get Malaysia timezone (UTC+8)
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            
+            # Set the target date range in Malaysia time
+            start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_my = start_my.replace(hour=23, minute=59, second=59)
+            
+            # Convert to UTC for database query
+            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Query with UTC timestamp range
             c.execute('''
-                SELECT 
-                    v.channel_name,
-                    v.channel_id,
-                    v.video_id,
-                    v.title as video_title,
-                    v.url as video_url,
-                    v.thumbnail_url,
-                    v.views,
-                    v.published_at,
-                    v.processed_at,
-                    ca.coin_mentioned,
-                    ca.reasons,
-                    ca.indicator
-                FROM videos v
-                LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
-                WHERE ca.coin_mentioned IS NOT NULL
-            ''')
+                WITH video_analyses AS (
+                    SELECT 
+                        v.channel_name,
+                        v.channel_id,
+                        v.video_id,
+                        v.title as video_title,
+                        v.url as video_url,
+                        v.thumbnail_url,
+                        v.views,
+                        v.published_at,
+                        v.processed_at,
+                        ca.coin_mentioned,
+                        ca.reasons,
+                        ca.indicator
+                    FROM videos v
+                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
+                    WHERE v.published_at BETWEEN ? AND ?
+                    AND ca.coin_mentioned IS NOT NULL
+                )
+                SELECT * FROM video_analyses
+                ORDER BY published_at DESC
+            ''', (start_utc, end_utc))
             
             rows = c.fetchall()
             
@@ -2753,15 +2769,11 @@ def get_todays_channel_analysis(date):
             # Format the response
             reasons = []
             coins_mentioned = set()
-            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
-
+            
             for row in rows:
-                # Convert published_at to Malaysia time
-                published_at = datetime.fromisoformat(row['published_at'].replace("Z", "+00:00"))  # Handle potential timezone info
-                published_at_malaysia = published_at.astimezone(malaysia_tz)
-
                 # Check if the published_at date matches the requested date
-                if published_at_malaysia.date() != target_date:
+                published_date = row['published_at'].date()
+                if published_date != target_date.date():
                     continue  # Skip this entry if the date does not match
                 
                 try:
@@ -2784,12 +2796,12 @@ def get_todays_channel_analysis(date):
                             }
                         })
                 except Exception as e:
-                    print(f"Error parsing reasons for video {row.get('video_id', 'unknown')}: {str(e)}")
+                    print(f"Error parsing reasons for video {row['video_id']}: {str(e)}")
                     continue
             
             # Calculate statistics
             statistics = {
-                "total_videos": len(set(r['source']['video_url'] for r in reasons)),  # Count unique video URLs
+                "total_videos": len(set(row['video_id'] for row in rows)),
                 "total_coins": len(coins_mentioned),
                 "total_reasons": len(reasons),
                 "coins_breakdown": {
