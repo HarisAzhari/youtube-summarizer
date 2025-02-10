@@ -39,7 +39,8 @@ CORS(app, resources={
             "https://admin.moometrics.io",  # Admin frontend
             "https://api.moometrics.io",    # API domain
             "https://moometrics.io",        # Main domain
-            "http://localhost:*"            # Local development
+            "http://localhost:*",           # Local development (any port)
+            "http://localhost:5176"         # Specific local development port
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
