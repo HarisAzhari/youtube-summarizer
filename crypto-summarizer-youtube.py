@@ -166,7 +166,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=10, minute=5, second=0, microsecond=0)
+    next_run = now.replace(hour=9, minute=51, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -2703,7 +2703,7 @@ def get_todays_channel_analysis(date):
     try:
         # Validate date format
         try:
-            target_date = datetime.strptime(date, "%Y-%m-%d")
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()  # Keep only the date part
         except ValueError:
             return jsonify({
                 "status": "error",
@@ -2714,51 +2714,25 @@ def get_todays_channel_analysis(date):
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # First get all coin name overrides
+            # Fetch all video analyses
             c.execute('''
                 SELECT 
-                    current_name,
-                    new_name
-                FROM coin_edits
-                ORDER BY edited_at DESC
+                    v.channel_name,
+                    v.channel_id,
+                    v.video_id,
+                    v.title as video_title,
+                    v.url as video_url,
+                    v.thumbnail_url,
+                    v.views,
+                    v.published_at,
+                    v.processed_at,
+                    ca.coin_mentioned,
+                    ca.reasons,
+                    ca.indicator
+                FROM videos v
+                LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE ca.coin_mentioned IS NOT NULL
             ''')
-            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
-            
-            # Get Malaysia timezone (UTC+8)
-            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
-            
-            # Set the target date range in Malaysia time
-            start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_my = start_my.replace(hour=23, minute=59, second=59)
-            
-            # Convert to UTC for database query
-            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Query with UTC timestamp range
-            c.execute('''
-                WITH video_analyses AS (
-                    SELECT 
-                        v.channel_name,
-                        v.channel_id,
-                        v.video_id,
-                        v.title as video_title,
-                        v.url as video_url,
-                        v.thumbnail_url,
-                        v.views,
-                        v.published_at,
-                        v.processed_at,
-                        ca.coin_mentioned,
-                        ca.reasons,
-                        ca.indicator
-                    FROM videos v
-                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
-                    WHERE v.published_at BETWEEN ? AND ?
-                    AND ca.coin_mentioned IS NOT NULL
-                )
-                SELECT * FROM video_analyses
-                ORDER BY published_at DESC
-            ''', (start_utc, end_utc))
             
             rows = c.fetchall()
             
@@ -2776,24 +2750,29 @@ def get_todays_channel_analysis(date):
                     }
                 })
             
-            # Format the response with name overrides
+            # Format the response
             reasons = []
             coins_mentioned = set()
-            
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+
             for row in rows:
+                # Convert published_at to Malaysia time
+                published_at = datetime.fromisoformat(row['published_at'].replace("Z", "+00:00"))  # Handle potential timezone info
+                published_at_malaysia = published_at.astimezone(malaysia_tz)
+
+                # Check if the published_at date matches the requested date
+                if published_at_malaysia.date() != target_date:
+                    continue  # Skip this entry if the date does not match
+                
                 try:
                     parsed_reasons = json.loads(row['reasons'])
-                    
-                    # Apply name override if exists
                     coin_name = row['coin_mentioned']
-                    if coin_name in name_mapping:
-                        coin_name = name_mapping[coin_name]
                     
                     coins_mentioned.add(coin_name)
                     
                     for reason in parsed_reasons:
                         reasons.append({
-                            "coin": coin_name,  # Use the overridden name
+                            "coin": coin_name,
                             "reason": reason,
                             "sentiment": row['indicator'],
                             "source": {
@@ -2805,12 +2784,12 @@ def get_todays_channel_analysis(date):
                             }
                         })
                 except Exception as e:
-                    print(f"Error parsing reasons for video {row['video_id']}: {str(e)}")
+                    print(f"Error parsing reasons for video {row.get('video_id', 'unknown')}: {str(e)}")
                     continue
             
             # Calculate statistics
             statistics = {
-                "total_videos": len(set(row['video_id'] for row in rows)),
+                "total_videos": len(set(r['source']['video_url'] for r in reasons)),  # Count unique video URLs
                 "total_coins": len(coins_mentioned),
                 "total_reasons": len(reasons),
                 "coins_breakdown": {
@@ -2830,8 +2809,6 @@ def get_todays_channel_analysis(date):
             
     except Exception as e:
         print(f"Error in get_todays_channel_analysis: {str(e)}")
-        print("\nFull error details:")
-        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
