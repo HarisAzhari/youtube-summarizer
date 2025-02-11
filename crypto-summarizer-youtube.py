@@ -167,7 +167,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=9, minute=51, second=0, microsecond=0)
+    next_run = now.replace(hour=8, minute=45, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3885,6 +3885,525 @@ def get_all_coin_reasons():
             
     except Exception as e:
         print(f"Error in get_all_coin_reasons: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/reason/<date>')
+def get_reasons_by_date(date):
+    """Get coin reasons for a specific date (Malaysia timezone)"""
+    try:
+        # Validate date format
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid date format. Please use YYYY-MM-DD"
+            }), 400
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Query with Malaysia timezone adjustment
+            c.execute('''
+                WITH video_times AS (
+                    SELECT 
+                        ca.coin_mentioned,
+                        ca.reasons,
+                        datetime(v.published_at, '+8 hours') as my_time
+                    FROM videos v
+                    JOIN coin_analysis ca ON v.video_id = ca.video_id
+                    WHERE date(datetime(v.published_at, '+8 hours')) = ?
+                )
+                SELECT coin_mentioned, reasons
+                FROM video_times
+                ORDER BY coin_mentioned
+            ''', (date,))
+            
+            mentions = [dict(row) for row in c.fetchall()]
+            
+            if not mentions:
+                return jsonify({
+                    "status": "success",
+                    "data": []
+                })
+
+            # Process mentions with name overrides and combine reasons
+            coin_reasons = {}
+            for mention in mentions:
+                # Apply name override if exists
+                coin_name = mention['coin_mentioned']
+                if coin_name in name_mapping:
+                    coin_name = name_mapping[coin_name]
+                
+                if coin_name not in coin_reasons:
+                    coin_reasons[coin_name] = set()
+                
+                # Add reasons to set to avoid duplicates
+                try:
+                    reasons = json.loads(mention['reasons'])
+                    coin_reasons[coin_name].update(reasons)
+                except json.JSONDecodeError:
+                    continue
+
+            # Format the response
+            formatted_results = [
+                {
+                    "coin": coin,
+                    "reasons": list(reasons)
+                }
+                for coin, reasons in coin_reasons.items()
+            ]
+            
+            # Sort by coin name
+            formatted_results.sort(key=lambda x: x["coin"])
+
+            return jsonify({
+                "status": "success",
+                "data": formatted_results
+            })
+            
+    except Exception as e:
+        print(f"Error in get_reasons_by_date: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/reason/summary/<date>')
+def summarize_daily_reasons(date):
+    """Analyze and summarize coin reasons for a specific date"""
+    try:
+        # First get the raw reasons using existing endpoint
+        raw_data = get_reasons_by_date(date).get_json()
+        if raw_data['status'] != 'success' or not raw_data['data']:
+            return jsonify({
+                "status": "error",
+                "message": "No data found for the specified date"
+            }), 404
+
+        # Configure Gemini
+        genai.configure(api_key=os.getenv('GEMINI_API_KEY_1'))
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+
+        # Create analysis prompt
+        prompt = """Analyze these cryptocurrency mentions and extract key points. 
+
+CRITICAL RULES:
+1. Combine similar points into clear, concise statements
+2. Remove duplicates and redundant information
+3. Keep specific numbers and statistics when relevant
+4. Maintain accuracy - don't create new information
+5. Keep the most important and impactful points only
+
+Format the response in this EXACT JSON structure:
+{
+    "summaries": [
+        {
+            "coin_name": "coin name",
+            "key_points": [
+                "important point 1",
+                "important point 2"
+            ]
+        }
+    ]
+}
+
+Analyze this data:
+"""
+        
+        try:
+            response = model.generate_content(prompt + json.dumps(raw_data['data'], indent=2))
+            
+            # Clean response
+            clean_response = response.text.strip()
+            if clean_response.startswith('```json'):
+                clean_response = clean_response[7:]
+            if clean_response.startswith('```'):
+                clean_response = clean_response[3:]
+            if clean_response.endswith('```'):
+                clean_response = clean_response[:-3]
+            
+            analysis = json.loads(clean_response.strip())
+            
+            return jsonify({
+                "status": "success",
+                "date": date,
+                "data": analysis
+            })
+
+        except Exception as e:
+            # Fallback to backup API key if rate limited
+            if "429" in str(e) or "quota exceeded" in str(e):
+                genai.configure(api_key=os.getenv('GEMINI_API_KEY_2'))
+                model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+                response = model.generate_content(prompt + json.dumps(raw_data['data'], indent=2))
+                clean_response = response.text.strip()
+                if clean_response.startswith('```json'):
+                    clean_response = clean_response[7:]
+                if clean_response.startswith('```'):
+                    clean_response = clean_response[3:]
+                if clean_response.endswith('```'):
+                    clean_response = clean_response[:-3]
+                
+                analysis = json.loads(clean_response.strip())
+                
+                return jsonify({
+                    "status": "success",
+                    "date": date,
+                    "data": analysis
+                })
+            else:
+                raise e
+
+    except Exception as e:
+        print(f"Error in summarize_daily_reasons: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/reason/summary/all')
+def summarize_all_reasons():
+    """Analyze and summarize coin reasons from Dec 25, 2024 to Feb 10, 2025"""
+    try:
+        print("\nStarting comprehensive reason analysis...")
+        
+        # Calculate date range - starting from December 25th
+        start_date = datetime(2024, 12, 25)  # Changed to Dec 25
+        end_date = datetime(2025, 2, 10)
+        
+        # Get all Gemini API keys from environment
+        gemini_keys = [
+            os.getenv('GEMINI_API_KEY_1'),
+            os.getenv('GEMINI_API_KEY_2'),
+            os.getenv('GEMINI_API_KEY_3'),
+            os.getenv('GEMINI_API_KEY_4')
+        ]
+        current_key_index = 0
+        
+        def get_next_key():
+            nonlocal current_key_index
+            key = gemini_keys[current_key_index]
+            current_key_index = (current_key_index + 1) % len(gemini_keys)
+            return key
+
+        print("\nConfiguring initial Gemini model...")
+        genai.configure(api_key=get_next_key())
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+        
+        current_date = start_date
+        
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y-%m-%d")
+            print(f"\n{'='*50}")
+            print(f"Processing date: {date_str}")
+            print(f"{'='*50}")
+            
+            # Get raw data for the date
+            raw_data = get_reasons_by_date(date_str).get_json()
+            
+            if raw_data['status'] != 'success' or not raw_data['data']:
+                print(f"No data found for {date_str}")
+                current_date += timedelta(days=1)
+                continue
+            
+            print(f"\nFound {len(raw_data['data'])} coins for {date_str}")
+            
+            # Process each coin individually
+            for coin_data in raw_data['data']:
+                coin_name = coin_data['coin']
+                print(f"\nProcessing coin: {coin_name}")
+                
+                while True:
+                    try:
+                        prompt = f"""Analyze these mentions for {coin_name} and create a professional news-style summary.
+
+CRITICAL RULES:
+1. Write in a professional news/journalism style (like Bloomberg, Reuters, or CoinDesk)
+2. Be direct, concise, and factual - no speculation or vague statements
+3. Prioritize concrete information: numbers, statistics, significant events
+4. Use strong, clear language appropriate for financial news
+5. Merge related points into cohesive statements
+6. Keep only the most impactful and newsworthy points
+7. Do NOT fabricate or infer information
+8. Return ONLY valid JSON - no markdown, no code blocks
+
+Format the response in this EXACT JSON structure:
+{{
+    "key_points": [
+        {{
+            "point": "Professional news-style point 1",
+            "sentiment": "BULLISH"
+        }},
+        {{
+            "point": "Professional news-style point 2",
+            "sentiment": "BEARISH"
+        }}
+    ]
+}}
+
+Example:
+{{
+    "key_points": [
+        {{
+            "point": "Bitcoin ETF accumulation reaches $5B as institutional demand surges",
+            "sentiment": "BULLISH"
+        }},
+        {{
+            "point": "Network congestion leads to 40% increase in transaction fees",
+            "sentiment": "BEARISH"
+        }}
+    ]
+}}
+
+Analyze this data:
+"""
+                        
+                        print(f"Analyzing data with Gemini...")
+                        response = model.generate_content(prompt + json.dumps(coin_data['reasons'], indent=2))
+                        
+                        # Clean response
+                        clean_response = response.text.strip()
+                        if clean_response.startswith('```json'):
+                            clean_response = clean_response[7:]
+                        if clean_response.startswith('```'):
+                            clean_response = clean_response[3:]
+                        if clean_response.endswith('```'):
+                            clean_response = clean_response[:-3]
+                        clean_response = clean_response.strip()
+                        
+                        print("\nCLEANED RESPONSE:")
+                        print(clean_response)
+                        
+                        try:
+                            analysis = json.loads(clean_response)
+                            
+                            # Store in database
+                            with sqlite3.connect(DB_PATH) as conn:
+                                c = conn.cursor()
+                                c.execute('''
+                                    INSERT INTO reason_summaries (analysis_date, coin_name, summary)
+                                    VALUES (?, ?, ?)
+                                ''', (date_str, coin_name, json.dumps(analysis)))
+                                conn.commit()
+                            
+                            print(f"Successfully stored summary for {coin_name}")
+                            break
+                            
+                        except json.JSONDecodeError as json_err:
+                            print(f"\nJSON PARSE ERROR: {str(json_err)}")
+                            print("Failed to parse response. Switching API key and retrying...")
+                            genai.configure(api_key=get_next_key())
+                            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+                            continue
+                            
+                    except Exception as e:
+                        if "429" in str(e) or "quota exceeded" in str(e):
+                            print(f"\nAPI key exhausted, switching to next key...")
+                            genai.configure(api_key=get_next_key())
+                            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+                            continue
+                        else:
+                            print(f"\nError processing {coin_name}: {str(e)}")
+                            print("Full error details:")
+                            import traceback
+                            traceback.print_exc()
+                            break
+            
+            print(f"\nCompleted processing all coins for {date_str}")
+            current_date += timedelta(days=1)
+        
+        print("\nAnalysis complete!")
+        return jsonify({
+            "status": "success",
+            "message": "All summaries have been processed and stored"
+        })
+        
+    except Exception as e:
+        print(f"\nError in summarize_all_reasons: {str(e)}")
+        print("\nFull error details:")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+# Add an endpoint to retrieve stored summaries
+@app.route('/youtube/reason/summary/stored/<date>')
+def get_stored_summary(date):
+    """Retrieve stored summary for a specific date"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT analysis_date, coin_name, summary, created_at
+                FROM reason_summaries
+                WHERE analysis_date = ?
+                ORDER BY coin_name
+            ''', (date,))
+            
+            rows = c.fetchall()
+            
+            if rows:
+                summaries = []
+                for row in rows:
+                    summaries.append({
+                        "coin_name": row['coin_name'],
+                        "key_points": json.loads(row['summary'])['key_points'],
+                        "created_at": row['created_at']
+                    })
+                
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "date": date,
+                        "summaries": summaries
+                    }
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": f"No summary found for date: {date}"
+                }), 404
+                
+    except Exception as e:
+        print(f"Error retrieving stored summary: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/test/summary/<date>')
+def test_summary(date):
+    """Test endpoint for summarizing crypto data with Gemini"""
+    try:
+        print(f"\nStarting test summary for date: {date}")
+        
+        # Configure Gemini
+        api_key = os.getenv('GEMINI_API_KEY_1')
+        if not api_key:
+            return jsonify({
+                "status": "error",
+                "message": "GEMINI_API_KEY_1 not found in environment variables"
+            }), 500
+            
+        print("\nConfiguring Gemini model...")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+        
+        # Get raw data using existing endpoint
+        raw_data = get_reasons_by_date(date).get_json()
+        
+        if raw_data['status'] != 'success' or not raw_data['data']:
+            return jsonify({
+                "status": "error",
+                "message": f"No data found for date: {date}"
+            }), 404
+
+        # Get coin name overrides
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+        # Apply name overrides to raw data
+        for item in raw_data['data']:
+            if item['coin'] in name_mapping:
+                item['coin'] = name_mapping[item['coin']]
+
+        print(f"\nFound {len(raw_data['data'])} coin mentions for {date}")
+        
+        prompt = """Analyze these cryptocurrency mentions and create professional news-style summaries.
+
+CRITICAL RULES:
+1. Write in a professional news/journalism style (like Bloomberg, Reuters, or CoinDesk)
+2. Be direct, concise, and factual - no speculation or vague statements
+3. Prioritize concrete information: numbers, statistics, significant events
+4. Use strong, clear language appropriate for financial news
+5. Merge related points into cohesive statements
+6. Maintain chronological order for events when relevant
+7. Keep only the most impactful and newsworthy points
+8. Do NOT fabricate or infer information
+9. Use EXACTLY the coin names provided - do not modify them
+
+Format the response in this EXACT JSON structure:
+{
+    "summaries": [
+        {
+            "coin_name": "coin name",
+            "key_points": [
+                "Professional news-style point 1",
+                "Professional news-style point 2"
+            ]
+        }
+    ]
+}
+
+Analyze this data:
+"""
+
+        print("\nSending to Gemini for analysis...")
+        response = model.generate_content(prompt + json.dumps(raw_data['data'], indent=2))
+        
+        # Print raw response for debugging
+        print("\nRAW GEMINI RESPONSE:")
+        print(response.text)
+        
+        # Clean response
+        clean_response = response.text.strip()
+        if clean_response.startswith('```json'):
+            clean_response = clean_response[7:]
+        if clean_response.startswith('```'):
+            clean_response = clean_response[3:]
+        if clean_response.endswith('```'):
+            clean_response = clean_response[:-3]
+        
+        print("\nCLEANED RESPONSE:")
+        print(clean_response)
+        
+        try:
+            analysis = json.loads(clean_response.strip())
+        except json.JSONDecodeError as json_err:
+            print(f"\nJSON PARSE ERROR: {str(json_err)}")
+            print("Raw response that failed to parse:")
+            print(clean_response)
+            raise
+        
+        return jsonify({
+            "status": "success",
+            "date": date,
+            "data": analysis
+        })
+        
+    except Exception as e:
+        print(f"\nError in test_summary: {str(e)}")
+        print("\nFull error details:")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
