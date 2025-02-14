@@ -5412,8 +5412,8 @@ def respond():
     data = request.json
     prompt = data.get('message')
     
-    # Use the API key from environment variables instead of hardcoding it
-    API_KEY = os.getenv('GEMINI_API_KEY_1')  # Ensure you set this environment variable
+    # Use the provided API key directly
+    API_KEY = 'AIzaSyBdMrLHWWswcUjJABblf2E1n2s1TZqYu9w'  # Your actual API key
 
     try:
         # Configure the model with the API key
