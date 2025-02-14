@@ -31,6 +31,7 @@ from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
 import traceback
 from functools import wraps
+from historical_price import HistoricalPriceService
 
 app = Flask(__name__)
 CORS(app, resources={
@@ -167,7 +168,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=8, minute=45, second=0, microsecond=0)
+    next_run = now.replace(hour=9, minute=50, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3989,6 +3990,10 @@ def summarize_daily_reasons(date):
     try:
         # First get the raw reasons using existing endpoint
         raw_data = get_reasons_by_date(date).get_json()
+        
+        # Print the raw data for debugging
+        print(f"Raw data for date {date}: {raw_data}")
+
         if raw_data['status'] != 'success' or not raw_data['data']:
             return jsonify({
                 "status": "error",
@@ -3999,36 +4004,33 @@ def summarize_daily_reasons(date):
         genai.configure(api_key=os.getenv('GEMINI_API_KEY_1'))
         model = genai.GenerativeModel(model_name="gemini-1.5-pro")
 
-        # Create analysis prompt
-        prompt = """Analyze these cryptocurrency mentions and extract key points. 
+        # Prepare data for coin-by-coin analysis
+        coin_data = {}
+        for entry in raw_data['data']:
+            coin_name = entry['coin']
+            if coin_name not in coin_data:
+                coin_data[coin_name] = []
+            # Access the correct key 'reasons'
+            coin_data[coin_name].extend(entry['reasons'])
 
-CRITICAL RULES:
-1. Combine similar points into clear, concise statements
-2. Remove duplicates and redundant information
-3. Keep specific numbers and statistics when relevant
-4. Maintain accuracy - don't create new information
-5. Keep the most important and impactful points only
+        # Create analysis prompt for each coin
+        summaries = []
+        for coin_name, reasons in coin_data.items():
+            prompt = f"""Analyze the reasons for {coin_name} and extract key points. 
 
-Format the response in this EXACT JSON structure:
-{
-    "summaries": [
-        {
-            "coin_name": "coin name",
-            "key_points": [
-                "important point 1",
-                "important point 2"
-            ]
-        }
-    ]
-}
+            CRITICAL RULES:
+            1. Combine similar points into clear, concise statements
+            2. Remove duplicates and redundant information
+            3. Keep specific numbers and statistics when relevant
+            4. Maintain accuracy - don't create new information
+            5. Keep the most important and impactful points only
 
-Analyze this data:
-"""
-        
-        try:
-            response = model.generate_content(prompt + json.dumps(raw_data['data'], indent=2))
-            
-            # Clean response
+            Analyze this data:
+            {json.dumps(reasons, indent=2)}
+            """
+
+            # The raw data for each coin is passed to the model for analysis
+            response = model.generate_content(prompt)
             clean_response = response.text.strip()
             if clean_response.startswith('```json'):
                 clean_response = clean_response[7:]
@@ -4036,38 +4038,18 @@ Analyze this data:
                 clean_response = clean_response[3:]
             if clean_response.endswith('```'):
                 clean_response = clean_response[:-3]
-            
+
             analysis = json.loads(clean_response.strip())
-            
-            return jsonify({
-                "status": "success",
-                "date": date,
-                "data": analysis
+            summaries.append({
+                "coin_name": coin_name,
+                "key_points": analysis.get('key_points', [])
             })
 
-        except Exception as e:
-            # Fallback to backup API key if rate limited
-            if "429" in str(e) or "quota exceeded" in str(e):
-                genai.configure(api_key=os.getenv('GEMINI_API_KEY_2'))
-                model = genai.GenerativeModel(model_name="gemini-1.5-pro")
-                response = model.generate_content(prompt + json.dumps(raw_data['data'], indent=2))
-                clean_response = response.text.strip()
-                if clean_response.startswith('```json'):
-                    clean_response = clean_response[7:]
-                if clean_response.startswith('```'):
-                    clean_response = clean_response[3:]
-                if clean_response.endswith('```'):
-                    clean_response = clean_response[:-3]
-                
-                analysis = json.loads(clean_response.strip())
-                
-                return jsonify({
-                    "status": "success",
-                    "date": date,
-                    "data": analysis
-                })
-            else:
-                raise e
+        return jsonify({
+            "status": "success",
+            "date": date,
+            "data": summaries
+        })
 
     except Exception as e:
         print(f"Error in summarize_daily_reasons: {str(e)}")
@@ -4076,168 +4058,72 @@ Analyze this data:
             "message": str(e)
         }), 500
 
-@app.route('/youtube/reason/summary/all')
-def summarize_all_reasons():
-    """Analyze and summarize coin reasons from Dec 25, 2024 to Feb 10, 2025"""
+@app.route('/youtube/reason-summaries/all/<coin>')
+def get_all_reason_summaries(coin=None):
+    """Get all entries from the reason_summaries table, optionally filtered by coin"""
     try:
-        print("\nStarting comprehensive reason analysis...")
-        
-        # Calculate date range - starting from December 25th
-        start_date = datetime(2024, 12, 25)  # Changed to Dec 25
-        end_date = datetime(2025, 2, 10)
-        
-        # Get all Gemini API keys from environment
-        gemini_keys = [
-            os.getenv('GEMINI_API_KEY_1'),
-            os.getenv('GEMINI_API_KEY_2'),
-            os.getenv('GEMINI_API_KEY_3'),
-            os.getenv('GEMINI_API_KEY_4')
-        ]
-        current_key_index = 0
-        
-        def get_next_key():
-            nonlocal current_key_index
-            key = gemini_keys[current_key_index]
-            current_key_index = (current_key_index + 1) % len(gemini_keys)
-            return key
-
-        print("\nConfiguring initial Gemini model...")
-        genai.configure(api_key=get_next_key())
-        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
-        
-        current_date = start_date
-        
-        while current_date <= end_date:
-            date_str = current_date.strftime("%Y-%m-%d")
-            print(f"\n{'='*50}")
-            print(f"Processing date: {date_str}")
-            print(f"{'='*50}")
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
             
-            # Get raw data for the date
-            raw_data = get_reasons_by_date(date_str).get_json()
+            # First, let's get the table schema
+            c.execute("PRAGMA table_info(reason_summaries)")
+            columns = [column[1] for column in c.fetchall()]
             
-            if raw_data['status'] != 'success' or not raw_data['data']:
-                print(f"No data found for {date_str}")
-                current_date += timedelta(days=1)
-                continue
+            # Prepare query based on whether coin parameter is provided
+            if coin:
+                # Case-insensitive search with partial matching
+                query = '''
+                    SELECT *
+                    FROM reason_summaries
+                    WHERE LOWER(coin_name) LIKE LOWER(?)
+                    ORDER BY analysis_date DESC, coin_name
+                '''
+                search_param = f'%{coin}%'
+                c.execute(query, (search_param,))
+            else:
+                # Get all entries if no coin specified
+                c.execute('''
+                    SELECT *
+                    FROM reason_summaries
+                    ORDER BY analysis_date DESC, coin_name
+                ''')
             
-            print(f"\nFound {len(raw_data['data'])} coins for {date_str}")
+            rows = c.fetchall()
             
-            # Process each coin individually
-            for coin_data in raw_data['data']:
-                coin_name = coin_data['coin']
-                print(f"\nProcessing coin: {coin_name}")
-                
-                while True:
-                    try:
-                        prompt = f"""Analyze these mentions for {coin_name} and create a professional news-style summary.
-
-CRITICAL RULES:
-1. Write in a professional news/journalism style (like Bloomberg, Reuters, or CoinDesk)
-2. Be direct, concise, and factual - no speculation or vague statements
-3. Prioritize concrete information: numbers, statistics, significant events
-4. Use strong, clear language appropriate for financial news
-5. Merge related points into cohesive statements
-6. Keep only the most impactful and newsworthy points
-7. Do NOT fabricate or infer information
-8. Return ONLY valid JSON - no markdown, no code blocks
-
-Format the response in this EXACT JSON structure:
-{{
-    "key_points": [
-        {{
-            "point": "Professional news-style point 1",
-            "sentiment": "BULLISH"
-        }},
-        {{
-            "point": "Professional news-style point 2",
-            "sentiment": "BEARISH"
-        }}
-    ]
-}}
-
-Example:
-{{
-    "key_points": [
-        {{
-            "point": "Bitcoin ETF accumulation reaches $5B as institutional demand surges",
-            "sentiment": "BULLISH"
-        }},
-        {{
-            "point": "Network congestion leads to 40% increase in transaction fees",
-            "sentiment": "BEARISH"
-        }}
-    ]
-}}
-
-Analyze this data:
-"""
-                        
-                        print(f"Analyzing data with Gemini...")
-                        response = model.generate_content(prompt + json.dumps(coin_data['reasons'], indent=2))
-                        
-                        # Clean response
-                        clean_response = response.text.strip()
-                        if clean_response.startswith('```json'):
-                            clean_response = clean_response[7:]
-                        if clean_response.startswith('```'):
-                            clean_response = clean_response[3:]
-                        if clean_response.endswith('```'):
-                            clean_response = clean_response[:-3]
-                        clean_response = clean_response.strip()
-                        
-                        print("\nCLEANED RESPONSE:")
-                        print(clean_response)
-                        
-                        try:
-                            analysis = json.loads(clean_response)
-                            
-                            # Store in database
-                            with sqlite3.connect(DB_PATH) as conn:
-                                c = conn.cursor()
-                                c.execute('''
-                                    INSERT INTO reason_summaries (analysis_date, coin_name, summary)
-                                    VALUES (?, ?, ?)
-                                ''', (date_str, coin_name, json.dumps(analysis)))
-                                conn.commit()
-                            
-                            print(f"Successfully stored summary for {coin_name}")
-                            break
-                            
-                        except json.JSONDecodeError as json_err:
-                            print(f"\nJSON PARSE ERROR: {str(json_err)}")
-                            print("Failed to parse response. Switching API key and retrying...")
-                            genai.configure(api_key=get_next_key())
-                            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
-                            continue
-                            
-                    except Exception as e:
-                        if "429" in str(e) or "quota exceeded" in str(e):
-                            print(f"\nAPI key exhausted, switching to next key...")
-                            genai.configure(api_key=get_next_key())
-                            model = genai.GenerativeModel(model_name="gemini-1.5-pro")
-                            continue
-                        else:
-                            print(f"\nError processing {coin_name}: {str(e)}")
-                            print("Full error details:")
-                            import traceback
-                            traceback.print_exc()
-                            break
+            if not rows:
+                return jsonify({
+                    "status": "success",
+                    "message": f"No entries found{f' for coin: {coin}' if coin else ''}",
+                    "schema": columns,
+                    "data": []
+                })
             
-            print(f"\nCompleted processing all coins for {date_str}")
-            current_date += timedelta(days=1)
-        
-        print("\nAnalysis complete!")
-        return jsonify({
-            "status": "success",
-            "message": "All summaries have been processed and stored"
-        })
-        
+            # Format the results
+            summaries = []
+            for row in rows:
+                try:
+                    summary_data = {
+                        "analysis_date": row['analysis_date'],
+                        "coin_name": row['coin_name'],
+                        "summary": json.loads(row['summary']),
+                        "created_at": row['created_at'] if 'created_at' in columns else None
+                    }
+                    summaries.append(summary_data)
+                except Exception as e:
+                    print(f"Error processing row: {str(e)}")
+                    continue
+            
+            return jsonify({
+                "status": "success",
+                "schema": columns,
+                "total_entries": len(summaries),
+                "filter": {"coin": coin} if coin else None,
+                "data": summaries
+            })
+            
     except Exception as e:
-        print(f"\nError in summarize_all_reasons: {str(e)}")
-        print("\nFull error details:")
-        import traceback
-        traceback.print_exc()
+        print(f"Error retrieving reason summaries: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
@@ -4408,6 +4294,1157 @@ Analyze this data:
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/youtube/summary/prompt3/<date>')
+def summary_prompt3(date):
+    """Process stored summaries coin by coin using enhanced news-style prompt"""
+    try:
+        print(f"\nStarting Prompt 3 summary for date: {date}")
+        
+        # Get stored summaries directly from database
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                
+                c.execute('''
+                    SELECT analysis_date, coin_name, summary, created_at
+                    FROM reason_summaries
+                    WHERE analysis_date = ?
+                    ORDER BY coin_name
+                ''', (date,))
+                
+                rows = c.fetchall()
+
+                print(f"Found {len(rows)} stored summaries for date: {date}")
+                
+                if not rows:
+                    return jsonify({
+                        "status": "error",
+                        "message": f"No stored summaries found for date: {date}"
+                    }), 404
+                
+                stored_data = {
+                    "data": {
+                        "date": date,
+                        "summaries": [{
+                            "coin_name": row['coin_name'],
+                            "key_points": json.loads(row['summary'])['key_points'],
+                            "created_at": row['created_at']
+                        } for row in rows]
+                    }
+                }
+                
+        except Exception as db_error:
+            print(f"Database error: {str(db_error)}")
+            return jsonify({
+                "status": "error",
+                "message": f"Database error: {str(db_error)}"
+            }), 500
+
+        # Configure Gemini
+        api_key = os.getenv('GEMINI_API_KEY_1')
+        if not api_key:
+            return jsonify({
+                "status": "error",
+                "message": "GEMINI_API_KEY_1 not found in environment variables"
+            }), 500
+            
+        print("\nConfiguring Gemini model...")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+        
+        processed_coins = []
+        
+        # Process each coin's summary
+        for coin_summary in stored_data['data']['summaries']:
+            coin_name = coin_summary['coin_name']
+            print(f"\nProcessing summary for {coin_name}")
+            
+            prompt = f"""Analyze this {coin_name} market data and create a professional Bloomberg/Reuters-style market analysis.
+
+CRITICAL RULES:
+1. Write in authoritative financial journalism style
+2. Focus on market-moving events, price action, and significant developments
+3. Include specific numbers, percentages, and market statistics when available
+4. Explain market impact and implications clearly
+5. Maintain professional, confident tone throughout
+6. Structure insights from most to least impactful
+7. Be direct and factual - no speculation
+8. Use strong, precise financial language
+
+Example high-quality response:
+{{
+    "coin_name": "Bitcoin",
+    "analysis": [
+        {{
+            "insight": "Bitcoin surges 8.5% to $48,250 as ETF inflows hit record $1.1B weekly volume, signaling strong institutional demand",
+            "impact": "BULLISH"
+        }},
+        {{
+            "insight": "Network activity jumps 40% MoM with 325,000 daily active addresses, indicating growing adoption",
+            "impact": "BULLISH"
+        }}
+    ]
+}}
+
+Original data to analyze:
+{json.dumps(coin_summary['key_points'], indent=2)}
+
+Return analysis in EXACT format shown above."""
+
+            try:
+                print("Sending to Gemini...")
+                response = model.generate_content(prompt)
+                
+                # Clean response
+                clean_response = response.text.strip()
+                if clean_response.startswith('```json'):
+                    clean_response = clean_response[7:]
+                if clean_response.startswith('```'):
+                    clean_response = clean_response[3:]
+                if clean_response.endswith('```'):
+                    clean_response = clean_response[:-3]
+                
+                analysis = json.loads(clean_response.strip())
+                processed_coins.append(analysis)
+                
+                # Store in database
+                try:
+                    with sqlite3.connect(DB_PATH) as conn:
+                        c = conn.cursor()
+                        # First check if table exists
+                        c.execute('''CREATE TABLE IF NOT EXISTS prompt3_summaries
+                                   (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    analysis_date TEXT,
+                                    coin_name TEXT,
+                                    analysis_data TEXT,
+                                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                        
+                        # Delete any existing analysis for this coin/date
+                        c.execute('''DELETE FROM prompt3_summaries 
+                                   WHERE analysis_date = ? AND coin_name = ?''', 
+                                (date, coin_name))
+                        
+                        # Insert new analysis
+                        c.execute('''INSERT INTO prompt3_summaries 
+                                   (analysis_date, coin_name, analysis_data)
+                                   VALUES (?, ?, ?)''',
+                                (date, coin_name, json.dumps(analysis)))
+                        conn.commit()
+                        print(f"Stored analysis in database for {coin_name}")
+                except Exception as db_error:
+                    print(f"Database error for {coin_name}: {str(db_error)}")
+                
+                print(f"Successfully processed {coin_name}")
+                
+            except Exception as e:
+                print(f"Error processing {coin_name}: {str(e)}")
+                continue
+
+        return jsonify({
+            "status": "success",
+            "data": {
+                "date": date,
+                "coins": processed_coins,
+                "total_processed": len(processed_coins)
+            }
+        })
+        
+    except Exception as e:
+        print(f"\nError in summary_prompt3: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+# Add a new endpoint to process the entire date range
+@app.route('/youtube/summary/prompt3/process-range')
+def process_date_range():
+    """Process summaries for date range Feb 11, 2025 to Feb 13, 2025 (Malaysia timezone)"""
+    try:
+        # Set up Malaysia timezone
+        malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+        
+        # Set date range in Malaysia timezone (Feb 11-13, 2025)
+        start_date = datetime(2025, 2, 13, tzinfo=malaysia_tz)
+        end_date = datetime(2025, 2, 14, tzinfo=malaysia_tz)
+        current_date = start_date
+        
+        print(f"\nAnalyzing period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} (Malaysia timezone)")
+        
+        processed_dates = []
+        
+        # Add one day to end_date to ensure we process the full last day
+        end_date = end_date + timedelta(days=1)
+        
+        while current_date < end_date:  # Changed <= to < since we added an extra day
+            date_str = current_date.strftime("%Y-%m-%d")
+            print(f"\n{'='*50}")
+            print(f"Processing date: {date_str}")
+            print(f"{'='*50}")
+            
+            try:
+                # Call the summary_prompt3 function for each date
+                response = summary_prompt3(date_str)
+                
+                # Handle the response correctly based on its type
+                if isinstance(response, tuple):
+                    response_data = response[0]
+                    status_code = response[1]
+                else:
+                    # If it's a Response object, get the json data
+                    response_data = response.json if hasattr(response, 'json') else response
+                    status_code = response.status_code if hasattr(response, 'status_code') else 200
+                
+                if status_code == 200:
+                    processed_dates.append({
+                        "date": date_str,
+                        "status": "success"
+                    })
+                else:
+                    error_message = response_data.get('message') if isinstance(response_data, dict) else str(response_data)
+                    processed_dates.append({
+                        "date": date_str,
+                        "status": "error",
+                        "message": error_message
+                    })
+            except Exception as e:
+                processed_dates.append({
+                    "date": date_str,
+                    "status": "error",
+                    "message": str(e)
+                })
+            
+            current_date += timedelta(days=1)
+            
+            # Add explicit check to ensure we process Feb 13
+            if date_str == "2025-02-13":
+                print("\nEnsuring Feb 13 is fully processed...")
+        
+        print("\nProcessing complete!")
+        return jsonify({
+            "status": "success",
+            "data": {
+                "date_range": {
+                    "start": start_date.strftime("%Y-%m-%d"),
+                    "end": (end_date - timedelta(days=1)).strftime("%Y-%m-%d"),  # Adjust end date in response
+                    "timezone": "Asia/Kuala_Lumpur"
+                },
+                "processed_dates": processed_dates
+            }
+        })
+        
+    except Exception as e:
+        print(f"\nError processing date range: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/summary/prompt3/stored/<date>')
+def get_prompt3_summaries(date):
+    """Retrieve stored Prompt 3 summaries for a specific date"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT analysis_date, coin_name, analysis_data, created_at
+                FROM prompt3_summaries
+                WHERE analysis_date = ?
+                ORDER BY coin_name
+            ''', (date,))
+            
+            rows = c.fetchall()
+            
+            if not rows:
+                return jsonify({
+                    "status": "error",
+                    "message": f"No Prompt 3 summaries found for date: {date}"
+                }), 404
+            
+            summaries = [{
+                "coin_name": row['coin_name'],
+                "analysis": json.loads(row['analysis_data'])['analysis'],
+                "created_at": row['created_at']
+            } for row in rows]
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": date,
+                    "summaries": summaries
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error retrieving Prompt 3 summaries: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/summary/prompt4/<date>')
+def summary_prompt4(date):
+    """Generate comprehensive market analysis including historical patterns and future predictions"""
+    try:
+        print(f"\nStarting Prompt 4 comprehensive analysis for date: {date}")
+        
+        # Get today's summaries from database
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                
+                print("\nGetting today's data from database...")
+                c.execute('''
+                    SELECT analysis_date, coin_name, summary
+                    FROM reason_summaries
+                    WHERE analysis_date = ?
+                    ORDER BY coin_name
+                ''', (date,))
+                
+                today_rows = c.fetchall()
+                
+                if not today_rows:
+                    print(f"No data found for date: {date}")
+                    return jsonify({
+                        "status": "error",
+                        "message": f"No summaries found for date: {date}"
+                    }), 404
+                
+                print(f"\nFound {len(today_rows)} coin summaries for today")
+                
+                # Get historical data (last 30 days)
+                current_date = datetime.strptime(date, '%Y-%m-%d')
+                past_date = current_date - timedelta(days=30)
+                
+                print(f"\nFetching historical data from {past_date.strftime('%Y-%m-%d')} to {date}")
+                c.execute('''
+                    SELECT analysis_date, coin_name, summary
+                    FROM reason_summaries
+                    WHERE analysis_date BETWEEN ? AND ?
+                    ORDER BY analysis_date DESC, coin_name
+                ''', (past_date.strftime('%Y-%m-%d'), date))
+                
+                historical_rows = c.fetchall()
+                print(f"Found {len(historical_rows)} historical summaries")
+                
+                # Format data for analysis
+                print("\nFormatting data for analysis...")
+                today_data = {
+                    "date": date,
+                    "summaries": []
+                }
+                
+                for row in today_rows:
+                    try:
+                        summary_json = json.loads(row['summary'])
+                        today_data['summaries'].append({
+                            "coin_name": row['coin_name'],
+                            "key_points": summary_json.get('key_points', [])
+                        })
+                    except Exception as e:
+                        print(f"Error processing summary for {row['coin_name']}: {str(e)}")
+                        continue
+                
+                historical_data = []
+                for row in historical_rows:
+                    try:
+                        summary_json = json.loads(row['summary'])
+                        historical_data.append({
+                            "date": row['analysis_date'],
+                            "coin_name": row['coin_name'],
+                            "key_points": summary_json.get('key_points', [])
+                        })
+                    except Exception as e:
+                        print(f"Error processing historical data for {row['coin_name']}: {str(e)}")
+                        continue
+
+        except Exception as db_error:
+            print(f"Database error: {str(db_error)}")
+            return jsonify({
+                "status": "error",
+                "message": f"Database error: {str(db_error)}"
+            }), 500
+
+        # Get historical prices for major coins
+        major_coins = ['btc', 'eth', 'sol', 'xrp']
+        historical_price_data = {}
+        for coin in major_coins:
+            try:
+                price_data = price_service.get_historical_prices(coin)
+                historical_price_data[coin.upper()] = price_data
+            except Exception as e:
+                print(f"Error getting {coin} price data: {str(e)}")
+
+        # Configure Gemini
+        api_key = os.getenv('GEMINI_API_KEY_1')
+        if not api_key:
+            return jsonify({
+                "status": "error",
+                "message": "GEMINI_API_KEY_1 not found in environment variables"
+            }), 500
+            
+        print("\nConfiguring Gemini model...")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+        
+        prompt = """Analyze the cryptocurrency market comprehensively, with a deep focus on historical patterns and relationships.
+
+CRITICAL RULES:
+1. Write in professional financial analysis style (Bloomberg/Reuters)
+2. Use specific price data to support your analysis
+3. Connect price movements with news events
+4. Provide data-backed technical analysis
+5. Include exact prices, percentages, and date-specific movements
+6. Focus on actionable insights and clear market narratives
+7. Maintain objectivity while highlighting key patterns
+8. In each of the analysis, provide a confidence score and explanation for the score.
+
+Required Categories:
+
+4.0 CURRENT MARKET OVERVIEW
+- Current market conditions with specific price levels
+- Major market-moving events and their direct price impact
+- Overall market sentiment backed by data
+- Key support/resistance levels for major coins
+- Notable volume and liquidity metrics
+- Correlation patterns between major assets
+
+4.1 HISTORICAL PATTERN ANALYSIS (Since December 1st)
+
+Market-Wide Patterns:
+- Comprehensive analysis of major market events since December 1st
+- Identification of recurring price patterns and their triggers
+- Cross-asset correlation analysis during significant events
+- Impact patterns of different types of news/events
+- Volume and liquidity trend analysis
+- Historical support/resistance effectiveness
+- Market sentiment cycles and their duration
+- Institutional activity patterns
+- Regulatory news impact assessment
+- Geographic market influence patterns
+- Macro event correlation analysis
+
+Bitcoin (BTC) Historical Analysis:
+- Detailed timeline of key price turning points since December
+- News events that preceded major price moves (both positive and negative)
+- Typical price reaction patterns to different news types
+- Historical support/resistance levels and their effectiveness
+- Pattern of institutional involvement and its price impact
+- Volume profile during major moves
+- Market sentiment cycles
+- Correlation with traditional markets during key events
+
+Ethereum (ETH) Historical Analysis:
+- Historical correlation patterns with BTC
+- Impact analysis of network upgrades and developments
+- Gas fee patterns and their price relationship
+- Developer activity correlation with price movements
+- DeFi TVL correlation with price
+- Historical response to market stress events
+- Network usage metrics correlation
+- Layer 2 development impact
+
+Solana (SOL) Historical Analysis:
+- Network performance impact on price movements
+- Historical recovery patterns from network issues
+- Correlation patterns with other L1 blockchains
+- DeFi activity impact on price movements
+- Developer activity correlation
+- NFT market impact analysis
+- Institutional investment patterns
+- Technical pattern effectiveness
+
+XRP Historical Analysis:
+- Legal news impact patterns on price
+- Historical volume analysis by region
+- Price action patterns in different jurisdictions
+- Correlation with traditional finance developments
+- Regulatory news impact assessment
+- Partnership announcement impact patterns
+- Cross-border transaction volume correlation
+- Historical support/resistance effectiveness
+
+Cross-Market Historical Analysis:
+- Crypto market correlation with traditional markets
+- Inter-cryptocurrency correlation patterns
+- Impact of global economic events
+- Regional market influence analysis
+- Regulatory impact patterns across regions
+- Trading volume distribution patterns
+- Liquidity flow patterns between assets
+- Institutional money flow patterns 
+
+4.2 LAYER 1 BLOCKCHAIN ANALYSIS
+
+CRITICAL RULES:
+1. Write in professional financial analysis style (Bloomberg/Reuters)
+2. Use specific price data to support your analysis
+3. Connect price movements with news events
+4. Provide data-backed technical analysis
+5. Include exact prices, percentages, and date-specific movements
+6. Focus on actionable insights and clear market narratives
+7. Maintain objectivity while highlighting key patterns
+8. In each of the analysis, provide a confidence score and explanation for the score.
+
+Layer 1 Market Overview:
+- Current state of Layer 1 ecosystem
+- Major market-moving events affecting L1s
+- Comparative performance analysis
+- TVL distribution across major L1s
+- Developer activity metrics
+- Cross-chain bridge volume analysis
+- Network adoption metrics comparison
+- Fee structure and revenue analysis
+
+For Each Layer 1 Project:
+
+Technical Infrastructure Analysis:
+- Network performance metrics
+- Scalability solutions progress
+- Transaction processing capabilities
+- Validator/node distribution
+- Network security measures
+- Fee structure effectiveness
+- Network upgrade impacts
+- Technical architecture advantages
+
+Ecosystem Development:
+- Smart contract platform adoption
+- DeFi ecosystem growth metrics
+- NFT and gaming platform status
+- Developer activity trends
+- Project launch success rate
+- Cross-chain bridge integration
+- Partnership developments
+- Community growth metrics
+
+Market Performance:
+- Price action analysis
+- Volume profile patterns
+- Liquidity depth analysis
+- Market maker participation
+- Institutional involvement
+- Trading pattern analysis
+- Support/resistance levels
+- Volatility comparison
+
+Network Usage:
+- Active address growth
+- Transaction volume trends
+- Smart contract interactions
+- Fee revenue analysis
+- Staking participation
+- Governance activity
+- Protocol revenue metrics
+- User adoption patterns
+
+Investment & Development:
+- Venture capital activity
+- Developer contribution metrics
+- Ecosystem fund allocation
+- Grant program progress
+- Institutional investment flows
+- Partnership announcement impacts
+- Technology adoption metrics
+- Innovation pipeline analysis
+
+Cross-L1 Comparative Analysis:
+- Performance metrics comparison
+- Fee structure effectiveness
+- Developer activity distribution
+- TVL growth patterns
+- Institutional investment flow
+- Cross-chain interoperability
+- Security incident analysis
+- Market share evolution
+
+"""
+
+        # Convert PriceData objects to dictionaries
+        formatted_price_data = {}
+        for coin, price_info in historical_price_data.items():
+            formatted_price_data[coin] = {
+                "symbol": price_info["symbol"],
+                "prices": [
+                    {"date": price.date, "price": price.price}
+                    for price in price_info["prices"]
+                ]
+            }
+
+        # Add historical price data and market news to the prompt
+        prompt += f"\n\nHistorical Price Data:\n{json.dumps(formatted_price_data, indent=2)}"
+        prompt += f"\n\nMarket News and Sentiment:\n{json.dumps(today_data, indent=2)}"
+
+        try:
+            print("\nSending to Gemini for analysis...")
+            response = model.generate_content(prompt)
+            
+            print("\nRAW GEMINI RESPONSE:")
+            print(response.text)
+            
+            # Return the raw response without JSON parsing
+            return jsonify({
+                "status": "success",
+                "gemini_response": response.text
+            })
+            
+        except Exception as e:
+            print(f"\nError generating analysis: {str(e)}")
+            print("\nFull error details:")
+            traceback.print_exc()
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
+            
+    except Exception as e:
+        print(f"\nError in summary_prompt4: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/summary/prompt4/stored/<date>')
+def get_prompt4_summary(date):
+    """Retrieve stored Prompt 4 summary for a specific date"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT analysis_date, market_analysis, created_at
+                FROM prompt4_summaries
+                WHERE analysis_date = ?
+            ''', (date,))
+            
+            row = c.fetchone()
+            
+            if not row:
+                return jsonify({
+                    "status": "error",
+                    "message": f"No Prompt 4 summary found for date: {date}"
+                }), 404
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": row['analysis_date'],
+                    "analysis": json.loads(row['market_analysis']),
+                    "created_at": row['created_at']
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error retrieving Prompt 4 summary: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+# Initialize the service (do this at the top level with other initializations)
+price_service = HistoricalPriceService()
+
+@app.route('/youtube/historical-price/<coin>')
+def get_historical_price(coin):
+    """Get historical price data for a specific coin starting from December 1, 2024"""
+    try:
+        result = price_service.get_historical_prices(coin)
+        return jsonify({
+            "status": "success",
+            "data": result
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/youtube/summary/prompt4/btc/<date>')
+def summary_prompt4_btc(date):
+    """Generate comprehensive Bitcoin market analysis using historical reasons and data"""
+    try:
+        print(f"\nStarting Prompt 4 BTC analysis for date: {date}")
+        
+        # Get historical BTC reasons from database
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                
+                # Get historical data (last 30 days)
+                current_date = datetime.strptime(date, '%Y-%m-%d')
+                past_date = current_date - timedelta(days=30)
+                
+                print(f"\nFetching BTC historical data from {past_date.strftime('%Y-%m-%d')} to {date}")
+                c.execute('''
+                    SELECT analysis_date, summary
+                    FROM reason_summaries
+                    WHERE analysis_date BETWEEN ? AND ?
+                    AND LOWER(coin_name) IN ('btc', 'bitcoin')
+                    ORDER BY analysis_date DESC
+                ''', (past_date.strftime('%Y-%m-%d'), date))
+                
+                historical_rows = c.fetchall()
+                print(f"Found {len(historical_rows)} historical BTC summaries")
+                
+                # Format historical data
+                historical_data = []
+                for row in historical_rows:
+                    try:
+                        summary_json = json.loads(row['summary'])
+                        historical_data.append({
+                            "date": row['analysis_date'],
+                            "key_points": summary_json.get('key_points', [])
+                        })
+                    except Exception as e:
+                        print(f"Error processing historical data: {str(e)}")
+                        continue
+
+        except Exception as db_error:
+            print(f"Database error: {str(db_error)}")
+            return jsonify({
+                "status": "error",
+                "message": f"Database error: {str(db_error)}"
+            }), 500
+
+        # Get BTC price data and convert to serializable format
+        try:
+            btc_price_data = price_service.get_historical_prices('btc')
+            
+            # Convert PriceData objects to dictionaries
+            formatted_price_data = {
+                "symbol": btc_price_data["symbol"],
+                "prices": [
+                    {
+                        "date": price.date,
+                        "price": price.price
+                    } for price in btc_price_data["prices"]
+                ]
+            }
+            
+            # Get current and previous prices for calculations
+            current_price = btc_price_data['prices'][-1].price if btc_price_data['prices'] else 0
+            previous_price = btc_price_data['prices'][-2].price if len(btc_price_data['prices']) > 1 else current_price
+            price_change = ((current_price - previous_price) / previous_price) * 100
+        except Exception as e:
+            print(f"Error getting BTC price data: {str(e)}")
+            current_price = 0
+            price_change = 0
+            formatted_price_data = {"symbol": "BTC", "prices": []}
+
+        # Configure Gemini
+        api_key = os.getenv('GEMINI_API_KEY_1')
+        if not api_key:
+            return jsonify({
+                "status": "error",
+                "message": "GEMINI_API_KEY_1 not found in environment variables"
+            }), 500
+            
+        print("\nConfiguring Gemini model...")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+        
+        prompt = f"""Analyze Bitcoin market conditions and provide a detailed report matching the exact format below.
+
+ANALYSIS REQUIREMENTS:
+
+1. MARKET DYNAMICS
+- ETF Impact Analysis:
+  * Daily inflow/outflow volumes
+  * AUM trends
+  * Market impact assessment
+  * Institutional participation metrics
+
+- Price Action Analysis:
+  * Support/resistance levels
+  * Volume profile
+  * Market depth
+  * Technical indicators
+  * Trading patterns
+
+- Network Fundamentals:
+  * Mining difficulty trends
+  * Hashrate metrics
+  * Network security assessment
+  * Transaction volumes
+  * Active addresses
+
+2. INSTITUTIONAL LANDSCAPE
+- ETF Metrics:
+  * Daily trading volumes
+  * Flow patterns
+  * Market maker activity
+  * Premium/discount analysis
+
+- Institutional Activity:
+  * Corporate holdings changes
+  * OTC desk volumes
+  * Custody solution adoption
+  * Institutional product development
+
+3. MARKET SENTIMENT
+- Technical Indicators:
+  * Fear & Greed index
+  * Long/short ratios
+  * Funding rates
+  * Options market sentiment
+
+- On-Chain Metrics:
+  * Whale wallet movements
+  * Exchange flows
+  * UTXO age distribution
+  * Mining pool behavior
+
+4. FORWARD-LOOKING INDICATORS
+- Upcoming Catalysts:
+  * Network upgrades
+  * Regulatory developments
+  * Institutional product launches
+  * Market structure changes
+
+Current Market Data:
+Price: ${current_price:.2f}
+24h Change: {price_change:.1f}%
+
+REQUIRED OUTPUT FORMAT:
+{{
+  "symbol": "BTC",
+  "name": "Bitcoin",
+  "price": "{current_price:.2f}",
+  "priceChange": {price_change:.1f},
+  "targetPrice": "[Target Price]",
+  "sentiment": "[Bullish/Neutral/Bearish]",
+  "sentimentScore": [1-10],
+  "market": "[Single detailed paragraph combining key market insights]",
+  "prediction": {{
+    "direction": "[Clear trend statement]",
+    "reasoning": [
+      "1. [ETF/Institutional insight]",
+      "2. [Network/Technical insight]",
+      "3. [Adoption/Development insight]",
+      "4. [Catalyst/Timeline insight]"
+    ]
+  }},
+  "timeline": "[3-month window]",
+  "confidence": [percentage],
+  "status": "In Progress"
+}}
+
+CRITICAL REQUIREMENTS:
+1. All analysis must be data-driven with specific numbers
+2. Market analysis must be one detailed paragraph
+3. Prediction points must be specific and quantifiable
+4. Maintain exact UI format
+5. Target price must have technical and fundamental basis
+6. Timeline must consider known upcoming events
+7. Confidence score must reflect data reliability
+8. All monetary values in USD
+
+Historical BTC Analysis Data:
+{json.dumps(historical_data, indent=2)}
+
+Price Data:
+{json.dumps(formatted_price_data, indent=2)}
+"""
+
+        try:
+            print("\nSending to Gemini for analysis...")
+            response = model.generate_content(prompt)
+            
+            print("\nRAW GEMINI RESPONSE:")
+            print(response.text)
+            
+            # Clean and parse response
+            clean_response = response.text.strip()
+            if clean_response.startswith('```json'):
+                clean_response = clean_response[7:]
+            if clean_response.startswith('```'):
+                clean_response = clean_response[3:]
+            if clean_response.endswith('```'):
+                clean_response = clean_response[:-3]
+            
+            analysis = json.loads(clean_response.strip())
+            
+            return jsonify({
+                "status": "success",
+                "data": analysis
+            })
+            
+        except Exception as e:
+            print(f"\nError generating analysis: {str(e)}")
+            print("\nFull error details:")
+            traceback.print_exc()
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
+            
+    except Exception as e:
+        print(f"\nError in summary_prompt4_btc: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/market-analysis/insert', methods=['POST'])
+def insert_market_analysis():
+    """Insert initial market analysis data"""
+    try:
+        initial_data = [
+            {
+                "symbol": "BTC",
+                "name": "Bitcoin",
+                "price": "$96,168",
+                "priceChange": 2.8,
+                "targetPrice": "$120,000",
+                "sentiment": "Bullish",
+                "sentimentScore": 8,
+                "market": "Bitcoin's market dynamics show significant institutional momentum following ETF approvals. Daily trading volumes across spot markets exceed $45B, with ETF volume maintaining $2B+ daily average. Key support levels established at $85,000-$89,000 range, with major resistance at $98,000-$102,000. Institutional holdings increased by 12% in the past month, while mining difficulty reached ATH at 81.55T. Options market shows strong call bias for June-July expiries, indicating bullish sentiment among derivatives traders. Network health metrics remain robust with hashrate stabilizing above 500 EH/s.",
+                "prediction": {
+                    "direction": "Upward trend likely",
+                    "reasoning": [
+                        "1. ETF inflows continue to exceed expectations with daily volume averaging $2B+",
+                        "2. Mining difficulty at all-time high, indicating strong network security",
+                        "3. Institutional adoption accelerating with major banks offering crypto custody",
+                        "4. Supply shock expected from upcoming halving event in April 2024"
+                    ]
+                },
+                "timeline": "Jul-Sep 2025",
+                "confidence": 75,
+                "status": "In Progress"
+            },
+            {
+                "symbol": "ETH",
+                "name": "Ethereum",
+                "price": "$2,613",
+                "priceChange": -1.5,
+                "targetPrice": "$3,500",
+                "sentiment": "Neutral",
+                "sentimentScore": 5,
+                "market": "Ethereum's market structure shows increasing complexity with major hedge funds building significant short positions (aggregate value $1.2B+). Recent price action contained within $2,400-$2,800 range with declining volatility. Layer 2 adoption surge continues with TVL reaching $27B across major solutions. Staking participation rate stabilized at 25.3% of total supply, yielding average 4.8% APR. DEX volume trending upward with 15% MoM growth. Gas fees moderating post-EIP-4844 implementation, averaging 20 gwei for standard transfers.",
+                "prediction": {
+                    "direction": "Potential breakout",
+                    "reasoning": [
+                        "1. Record short positions could trigger significant short squeeze",
+                        "2. EIP-4844 upgrade improving scalability and reducing fees",
+                        "3. Growing institutional interest in staking services",
+                        "4. Spot ETF approval speculation driving market sentiment"
+                    ]
+                },
+                "timeline": "Oct-Dec 2025",
+                "confidence": 60,
+                "status": "In Progress"
+            },
+            {
+                "symbol": "SOL",
+                "name": "Solana",
+                "price": "$197",
+                "priceChange": 4.2,
+                "targetPrice": "$250",
+                "sentiment": "Bullish",
+                "sentimentScore": 7,
+                "market": "Solana ecosystem metrics demonstrate robust growth with daily active addresses reaching 1.2M+. Network performance maintains 99.98% uptime over past quarter. DeFi TVL surged 45% YTD to $12.8B, dominated by lending and DEX protocols. NFT marketplace volume showing steady recovery with 28% MoM increase. Developer activity remains strong with 350+ monthly active contributors. Transaction costs stable at ~$0.002 average, processing 3,000 TPS at peak times. Institutional inflows primarily targeting liquid staking derivatives and DeFi yield opportunities.",
+                "prediction": {
+                    "direction": "Sustained growth expected",
+                    "reasoning": [
+                        "1. DeFi TVL growing consistently month-over-month",
+                        "2. Network stability improvements reducing downtime incidents",
+                        "3. Rising institutional adoption in NFT and DeFi sectors",
+                        "4. Competitive advantage in transaction speed and costs"
+                    ]
+                },
+                "timeline": "Apr-Jun 2025",
+                "confidence": 65,
+                "status": "In Progress"
+            },
+            {
+                "symbol": "XRP",
+                "name": "XRP",
+                "price": "$2.41",
+                "priceChange": -0.8,
+                "targetPrice": "$3.00",
+                "sentiment": "Neutral",
+                "sentimentScore": 6,
+                "market": "XRP market sentiment improving following regulatory clarity achievements. Network seeing increased adoption in cross-border payment corridors, with 24h transfer volume reaching $450M+. Banking partnerships expanded to 35+ institutions across APAC and LATAM regions. ODL (On-Demand Liquidity) corridors showing 25% QoQ growth in transaction volume. Ripple's enterprise solutions gaining traction with 15 new financial institutions onboarded in Q1 2025. Network upgrades focused on smart contract functionality and DeFi ecosystem development.",
+                "prediction": {
+                    "direction": "Moderate upside potential",
+                    "reasoning": [
+                        "1. Ongoing partnerships with major financial institutions",
+                        "2. Improved regulatory clarity post-SEC case resolution",
+                        "3. Expansion in cross-border payment solutions",
+                        "4. Growing adoption in emerging markets"
+                    ]
+                },
+                "timeline": "Jan-Mar 2026",
+                "confidence": 55,
+                "status": "In Progress"
+            }
+        ]
+
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Create table if it doesn't exist
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS market_analysis (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    price TEXT NOT NULL,
+                    price_change REAL NOT NULL,
+                    target_price TEXT NOT NULL,
+                    sentiment TEXT NOT NULL,
+                    sentiment_score INTEGER NOT NULL,
+                    market TEXT NOT NULL,
+                    prediction_direction TEXT NOT NULL,
+                    prediction_reasoning TEXT NOT NULL,
+                    timeline TEXT NOT NULL,
+                    confidence INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(symbol)
+                )
+            ''')
+            
+            # Insert data
+            for item in initial_data:
+                c.execute('''
+                    INSERT OR REPLACE INTO market_analysis 
+                    (symbol, name, price, price_change, target_price, 
+                     sentiment, sentiment_score, market, prediction_direction,
+                     prediction_reasoning, timeline, confidence, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    item['symbol'],
+                    item['name'],
+                    item['price'],
+                    item['priceChange'],
+                    item['targetPrice'],
+                    item['sentiment'],
+                    item['sentimentScore'],
+                    item['market'],
+                    item['prediction']['direction'],
+                    json.dumps(item['prediction']['reasoning']),
+                    item['timeline'],
+                    item['confidence'],
+                    item['status']
+                ))
+
+        return jsonify({
+            "status": "success",
+            "message": "Market analysis data inserted successfully"
+        })
+
+    except Exception as e:
+        print(f"Error inserting market analysis: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/market-analysis/get', methods=['GET'])
+def get_market_analysis():
+    """Get market analysis data"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT *
+                FROM market_analysis
+                ORDER BY confidence DESC
+            ''')
+            
+            rows = c.fetchall()
+            analyses = []
+            
+            for row in dict(row):
+                analysis = {
+                    "symbol": row['symbol'],
+                    "name": row['name'],
+                    "price": row['price'],
+                    "priceChange": row['price_change'],
+                    "targetPrice": row['target_price'],
+                    "sentiment": row['sentiment'],
+                    "sentimentScore": row['sentiment_score'],
+                    "market": row['market'],
+                    "prediction": {
+                        "direction": row['prediction_direction'],
+                        "reasoning": json.loads(row['prediction_reasoning'])
+                    },
+                    "timeline": row['timeline'],
+                    "confidence": row['confidence'],
+                    "status": row['status'],
+                    "lastUpdated": row['last_updated']
+                }
+                analyses.append(analysis)
+
+            return jsonify({
+                "status": "success",
+                "data": analyses
+            })
+
+    except Exception as e:
+        print(f"Error getting market analysis: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/respond', methods=['POST'])
+def respond():
+    data = request.json
+    prompt = data.get('message')
+    
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Structured prompt for Fiqh questions
+        system_prompt = """
+        You are a Fiqh guidance system. When users ask about Zakat or other Fiqh topics:
+        1. Instead of giving direct answers, provide 3-4 clarifying questions
+        2. Focus on understanding which specific aspect they need help with
+        3. Questions should cover different aspects like:
+           - Practical implementation
+           - Conditions and requirements
+           - Specific situations or cases
+           - Timing and scheduling
+        4. Format your response as numbered questions only
+        5. Each question should start with "Are you asking about..."
+
+        For example, if someone asks about Zakat, respond with questions like:
+        1. Are you asking about how to calculate the minimum amount (nisab) for Zakat?
+        2. Are you asking about which types of wealth are subject to Zakat?
+        3. Are you asking about when Zakat becomes obligatory?
+
+        Provide 6 clarifying questions
+
+        Provide respond according to the language of the user if its english or urdu or arabic or malay. The question is not only about zakat but also about other fiqh topics.
+
+        Current user question\n: {user_question}
+        """
+        
+        final_prompt = system_prompt.format(user_question=prompt)
+        response = model.generate_content(final_prompt)
+        return jsonify({"clarifying_questions": response.text})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     init_db()
