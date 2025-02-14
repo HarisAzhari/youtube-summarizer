@@ -5413,7 +5413,7 @@ def respond():
     prompt = data.get('message')
     
     # Use the API key from environment variables instead of hardcoding it
-    API_KEY = os.getenv('GEMINI_API_KEY')  # Ensure you set this environment variable
+    API_KEY = os.getenv('GEMINI_API_KEY_1')  # Ensure you set this environment variable
 
     try:
         # Configure the model with the API key
