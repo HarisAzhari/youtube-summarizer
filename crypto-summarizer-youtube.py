@@ -41,7 +41,8 @@ CORS(app, resources={
             "https://api.moometrics.io",    # API domain
             "https://moometrics.io",        # Main domain
             "http://localhost:*",           # Local development (any port)
-            "http://localhost:5176"         # Specific local development port
+            "http://localhost:5176",
+            "https://www.aifiqh.com"        # Specific local development port
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
@@ -5411,7 +5412,12 @@ def respond():
     data = request.json
     prompt = data.get('message')
     
+    # Use the API key from environment variables instead of hardcoding it
+    API_KEY = os.getenv('GEMINI_API_KEY')  # Ensure you set this environment variable
+
     try:
+        # Configure the model with the API key
+        genai.configure(api_key=API_KEY)  # Configure the model with the API key
         model = genai.GenerativeModel('gemini-2.0-flash')
         
         # Structured prompt for Fiqh questions
