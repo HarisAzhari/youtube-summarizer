@@ -5452,6 +5452,104 @@ def respond():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/answer-detailed', methods=['POST'])
+def answer_detailed():
+    try:
+        # Get the question from request body
+        request_data = request.get_json()
+        if not request_data or 'question' not in request_data:
+            return jsonify({
+                "error": "Please provide a question in the request body",
+                "status": "error"
+            }), 400
+
+        question = request_data['question']
+        print(f"Received question: {question}")
+
+        # Use Gemini to identify relevant keywords and analyze the question
+        print("Analyzing question with Gemini...")
+        api_key = "AIzaSyCrH4y3hiGHd8UnsXkWvC2_OvNcJb4jWZo"
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-pro')
+
+        analysis_prompt = f"""
+        Given this question: "{question}"
+        
+        Identify the most important keywords or concepts that would help find relevant information in an Islamic text.
+        Return your response in this JSON format:
+        {{
+            "keywords": ["keyword1", "keyword2", ...]
+        }}
+        """
+
+        print("Sending analysis prompt to Gemini...")
+        keywords_response = model.generate_content(analysis_prompt)
+        keywords_data = json.loads(keywords_response.text)
+        keywords = keywords_data.get('keywords', [])
+        print(f"Keywords identified: {keywords}")
+
+        # Read batch.json
+        print("Reading batch.json file...")
+        try:
+            with open('batch.json', 'r', encoding='utf-8') as f:
+                batch_data = json.load(f)
+        except Exception as e:
+            print(f"Error reading batch.json: {str(e)}")
+            return jsonify({
+                "error": "Error reading batch analysis file",
+                "status": "error"
+            }), 500
+
+        # Search through batch analyses for relevant content based on keywords
+        print("Searching through batch analyses...")
+        relevant_analyses = []
+
+        for batch in batch_data['batch_analyses']:
+            analysis_text = batch.get('analysis', '').lower()
+            # Check if any keywords match in the analysis
+            if any(keyword.lower() in analysis_text for keyword in keywords):
+                print(f"Found relevant content in batch: {batch['batch']}")
+                relevant_analyses.append(batch)
+
+        if not relevant_analyses:
+            print("No relevant content found")
+            return jsonify({
+                "status": "no_results",
+                "message": "No relevant content found for your question"
+            })
+
+        # Use Gemini to generate a final answer based on the found content
+        print("Generating final answer...")
+        answer_prompt = f"""
+        Question: {question}
+
+        Based on these relevant excerpts from an Islamic text:
+
+        {json.dumps(relevant_analyses, indent=2)}
+
+        Please provide:
+        1. A direct answer to the question
+        2. The specific batches where this information was found
+        3. Any additional context that might be helpful
+        """
+
+        final_answer = model.generate_content(answer_prompt)
+
+        return jsonify({
+            "status": "success",
+            "question": question,
+            "keywords_used": keywords,
+            "relevant_analyses": relevant_analyses,
+            "answer": final_answer.text
+        })
+
+    except Exception as e:
+        print(f"Error in /answer-detailed endpoint: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "status": "error"
+        }), 500
+
 if __name__ == '__main__':
     init_db()
     app.run(port=8080, host='0.0.0.0')
