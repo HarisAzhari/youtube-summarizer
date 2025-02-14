@@ -5571,7 +5571,7 @@ def answer_detailed():
 
         # Use Gemini to identify relevant keywords and analyze the question
         print("Analyzing question with Gemini...")
-        api_key = "AIzaSyDU3yl8ZGdXUFN6rN2uKnl8dKuwwDQUdXg"
+        api_key = "AIzaSyBVaovh2Cz9LU7gUJ_ft00UBEv26_vaaC0"
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-pro')
 
