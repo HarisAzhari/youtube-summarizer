@@ -2726,145 +2726,63 @@ def get_coin_mentions():
         }), 500
 
 @app.route('/youtube/today-analysis/<date>')
-def get_todays_channel_analysis(date):
+def get_today_analysis(date):
+    """Get analysis for a specific date (Malaysia time)"""
     try:
-        # Validate date format
-        try:
-            target_date = datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            return jsonify({
-                "status": "error",
-                "message": "Invalid date format. Please use YYYY-MM-DD"
-            }), 400
-
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # First get all coin name overrides
+            # Get all relevant data
             c.execute('''
                 SELECT 
-                    current_name,
-                    new_name
-                FROM coin_edits
-                ORDER BY edited_at DESC
+                    ca.coin_mentioned,
+                    ca.reasons,
+                    ca.indicator as sentiment,
+                    v.channel_name as channel,
+                    v.processed_at,
+                    v.published_at,
+                    v.title as video_title,
+                    v.url as video_url
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
             ''')
-            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
             
-            # Get Malaysia timezone (UTC+8)
-            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            analyses = []
+            target_date = datetime.strptime(date, '%Y-%m-%d').date()
             
-            # Set the target date range in Malaysia time
-            start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_my = start_my.replace(hour=23, minute=59, second=59)
-            
-            # Convert to UTC for database query
-            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Query with UTC timestamp range
-            c.execute('''
-                WITH video_analyses AS (
-                    SELECT 
-                        v.channel_name,
-                        v.channel_id,
-                        v.video_id,
-                        v.title as video_title,
-                        v.url as video_url,
-                        v.thumbnail_url,
-                        v.views,
-                        v.published_at,
-                        v.processed_at,
-                        ca.coin_mentioned,
-                        ca.reasons,
-                        ca.indicator
-                    FROM videos v
-                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
-                    WHERE v.published_at BETWEEN ? AND ?
-                    AND ca.coin_mentioned IS NOT NULL
-                )
-                SELECT * FROM video_analyses
-                ORDER BY published_at DESC
-            ''', (start_utc, end_utc))
-            
-            rows = c.fetchall()
-            
-            if not rows:
-                return jsonify({
-                    "status": "success",
-                    "data": {
-                        "date": date,
-                        "reasons": [],
-                        "statistics": {
-                            "total_videos": 0,
-                            "total_coins": 0,
-                            "total_reasons": 0
-                        }
-                    }
-                })
-            
-            # Format the response with name overrides
-            reasons = []
-            coins_mentioned = set()
-            
-            for row in rows:
-                try:
-                    parsed_reasons = json.loads(row['reasons'])
+            for row in c.fetchall():
+                # Convert UTC to Malaysia time
+                utc_time = datetime.strptime(row['published_at'].split('+')[0], '%Y-%m-%dT%H:%M:%S')
+                malaysia_time = utc_time + timedelta(hours=8)
+                
+                # If Malaysia date matches our target
+                if malaysia_time.date() == target_date:
+                    # Parse reasons from JSON string
+                    reasons = json.loads(row['reasons']) if row['reasons'] else []
                     
-                    # Apply name override if exists
-                    coin_name = row['coin_mentioned']
-                    if coin_name in name_mapping:
-                        coin_name = name_mapping[coin_name]
-                    
-                    coins_mentioned.add(coin_name)
-                    
-                    for reason in parsed_reasons:
-                        reasons.append({
-                            "coin": coin_name,  # Using overridden name
+                    for reason in reasons:
+                        analyses.append({
+                            "coin": row['coin_mentioned'],
                             "reason": reason,
-                            "sentiment": row['indicator'],
+                            "sentiment": row['sentiment'],
                             "source": {
-                                "channel": row['channel_name'],
-                                "video_title": row['video_title'],
-                                "video_url": row['video_url'],
+                                "channel": row['channel'],
+                                "processed_at": row['processed_at'],
                                 "published_at": row['published_at'],
-                                "processed_at": row['processed_at']
+                                "video_title": row['video_title'],
+                                "video_url": row['video_url']
                             }
                         })
-                except Exception as e:
-                    print(f"Error parsing reasons for video {row['video_id']}: {str(e)}")
-                    continue
-            
-            # Calculate statistics with overridden names
-            statistics = {
-                "total_videos": len(set(row['video_id'] for row in rows)),
-                "total_coins": len(coins_mentioned),
-                "total_reasons": len(reasons),
-                "coins_breakdown": {
-                    coin: len([r for r in reasons if r['coin'] == coin])
-                    for coin in coins_mentioned
-                },
-                "name_overrides_applied": len(name_mapping)  # Added for transparency
-            }
             
             return jsonify({
                 "status": "success",
-                "data": {
-                    "date": date,
-                    "reasons": reasons,
-                    "statistics": statistics,
-                    "metadata": {
-                        "timezone": "Asia/Kuala_Lumpur",
-                        "period": {
-                            "start": start_utc,
-                            "end": end_utc
-                        }
-                    }
-                }
+                "analyses": analyses
             })
             
     except Exception as e:
-        print(f"Error in get_todays_channel_analysis: {str(e)}")
+        print(f"Error getting today's analysis: {str(e)}")
+        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
@@ -6129,6 +6047,65 @@ def get_coin_trend():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/youtube/mentions/<date>')
+def get_daily_coin_mentions(date):
+    """Get simple list of coins mentioned on a specific date (Malaysia time)"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Get ALL videos and their published times
+            c.execute('''
+                SELECT DISTINCT
+                    ca.coin_mentioned,
+                    v.published_at
+                FROM videos v
+                JOIN coin_analysis ca ON v.video_id = ca.video_id
+            ''')
+            
+            # Process dates in Python
+            coins = []
+            target_date = datetime.strptime(date, '%Y-%m-%d').date()
+            print("Target: ", target_date)
+            
+            for row in c.fetchall():
+                # Convert UTC to Malaysia time
+                utc_time = datetime.strptime(row['published_at'], '%Y-%m-%dT%H:%M:%S%z')
+                malaysia_time = utc_time + timedelta(hours=8)
+                
+                # Check if the Malaysia date matches our target
+                if malaysia_time.date() == target_date:
+                    coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                    if coin_name not in coins:  # Avoid duplicates
+                        coins.append(coin_name)
+            
+            coins.sort()  # Keep the list sorted
+            
+            return jsonify({
+                "status": "success",
+                "coins": coins
+            })
+            
+    except Exception as e:
+        print(f"Error getting coin mentions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 
 if __name__ == '__main__':
