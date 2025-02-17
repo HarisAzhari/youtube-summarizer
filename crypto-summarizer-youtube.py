@@ -5396,7 +5396,7 @@ def get_market_analysis():
             rows = c.fetchall()
             analyses = []
             
-            for row in rows:  # Corrected this line
+            for row in rows:
                 analysis = {
                     "symbol": row['symbol'],
                     "name": row['name'],
@@ -5424,6 +5424,142 @@ def get_market_analysis():
 
     except Exception as e:
         print(f"Error getting market analysis: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/v1/combined-analysis', methods=['GET'])
+def get_combined_analysis():
+    """Fetch comprehensive market analysis"""
+    try:
+        # Get market analysis data
+        response = requests.get('https://api.moometrics.io/news/market-analysis/get', timeout=30)
+        response.raise_for_status()
+        analyses = response.json().get('data', [])
+        
+        processed_analyses = []
+        for analysis in analyses:
+            # Get coin details
+            coin_search = requests.get(
+                f"https://api.heifereum.com/api/cryptocurrency/search",
+                params={"query": analysis['symbol']},
+                timeout=30
+            )
+            coin_search.raise_for_status()
+            coin_data = coin_search.json().get('coins', [])
+            if not coin_data:
+                continue
+            
+            coin_details = coin_data[0]
+            
+            # Get crypto info
+            crypto_info = requests.get(
+                f"https://api.heifereum.com/api/cryptocurrency/info",
+                params={"id": coin_details['id']},
+                timeout=30
+            )
+            crypto_info.raise_for_status()
+            coin_info = crypto_info.json()
+            market_data = coin_info.get('market_data', {})
+            
+            # Format response
+            processed_analysis = {
+                "confidence": analysis['confidence'],
+                "lastUpdated": analysis['lastUpdated'],
+                "market": analysis['market'],
+                "id": coin_details['id'],
+                "symbol": analysis['symbol'],
+                "prediction": analysis['prediction'],
+                "current_price": float(market_data.get('current_price', {}).get('usd', '0')),
+                "price_change_24h": float(market_data.get('price_change_percentage_24h', '0')),
+                "sentiment": analysis['sentiment'],
+                "sentiment_score": analysis['sentimentScore'],
+                "status": analysis['status'],
+                "target_price": float(analysis['targetPrice'].replace('$', '').replace(',', '')),
+                "timeline": analysis['timeline'],
+                "image": coin_info.get('image', {}).get('thumb', '')
+            }
+            processed_analyses.append(processed_analysis)
+            
+        return jsonify({
+            "status": "success",
+            "data": processed_analyses
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/v1/combined-analysis/<symbol>', methods=['GET'])
+def get_single_combined_analysis(symbol):
+    """Fetch analysis for a specific cryptocurrency"""
+    try:
+        # Get market analysis data
+        response = requests.get('https://api.moometrics.io/news/market-analysis/get', timeout=30)
+        response.raise_for_status()
+        analyses = response.json().get('data', [])
+        
+        # Find matching analysis
+        analysis = next((a for a in analyses if a['symbol'].upper() == symbol.upper()), None)
+        if not analysis:
+            return jsonify({
+                "status": "error",
+                "message": f"No analysis found for {symbol}"
+            }), 404
+        
+        # Get coin details
+        coin_search = requests.get(
+            f"https://api.heifereum.com/api/cryptocurrency/info",
+            params={"query": analysis['symbol']},
+            timeout=30
+        )
+        coin_search.raise_for_status()
+        coin_data = coin_search.json().get('coins', [])
+        if not coin_data:
+            return jsonify({
+                "status": "error",
+                "message": f"Coin not found: {symbol}"
+            }), 404
+        
+        coin_details = coin_data[0]
+        
+        # Get crypto info
+        crypto_info = requests.get(
+            f"https://api.heifereum.com/api/cryptocurrency/info",
+            params={"id": coin_details['id']},
+            timeout=30
+        )
+        crypto_info.raise_for_status()
+        coin_info = crypto_info.json()
+        market_data = coin_info.get('market_data', {})
+        
+        # Format response
+        processed_analysis = {
+            "confidence": analysis['confidence'],
+            "lastUpdated": analysis['lastUpdated'],
+            "market": analysis['market'],
+            "id": coin_details['id'],
+            "symbol": analysis['symbol'],
+            "prediction": analysis['prediction'],
+            "current_price": float(market_data.get('current_price', {}).get('usd', '0')),
+            "price_change_24h": float(market_data.get('price_change_percentage_24h', '0')),
+            "sentiment": analysis['sentiment'],
+            "sentiment_score": analysis['sentimentScore'],
+            "status": analysis['status'],
+            "target_price": float(analysis['targetPrice'].replace('$', '').replace(',', '')),
+            "timeline": analysis['timeline'],
+            "image": coin_info.get('image', {}).get('thumb', '')
+        }
+        
+        return jsonify({
+            "status": "success",
+            "data": processed_analysis
+        })
+        
+    except Exception as e:
         return jsonify({
             "status": "error",
             "message": str(e)
