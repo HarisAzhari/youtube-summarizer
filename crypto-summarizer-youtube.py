@@ -5730,12 +5730,159 @@ def answer_detailed():
             "error": str(e),
             "status": "error"
         }), 500
-    
-import random
-    
 def remove_backticks(text):
     """Remove three consecutive backticks from the text."""
     return text.replace('```', '').replace('`', '')
+
+
+class ExpiringCache:
+    def __init__(self, expiration_hours=24):
+        self.data = None
+        self.timestamp = None
+        self.expiration_hours = expiration_hours
+    
+    def set(self, data):
+        self.data = data
+        self.timestamp = datetime.now()
+    
+    def get(self):
+        if not self.data or not self.timestamp:
+            return None
+        
+        # Check if cache has expired
+        if datetime.now() - self.timestamp > timedelta(hours=self.expiration_hours):
+            self.data = None
+            self.timestamp = None
+            return None
+        
+        return self.data
+
+# Global cache instance
+_thumbs_cache = ExpiringCache()
+
+def get_coin_thumb(coin_name):
+    """Get thumbnail for a specific coin with robust error handling"""
+    try:
+        # Clean coin name and create search URL
+        search_term = coin_name.lower().strip()
+        if '(' in search_term:
+            search_term = search_term.split('(')[0].strip()
+        
+        url = f'https://api.heifereum.com/api/cryptocurrency/search?query={search_term}'
+        
+        # Make request with proper headers and timeout
+        headers = {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': 'application/json'
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('coins') and len(data['coins']) > 0:
+                    thumb = data['coins'][0].get('thumb')
+                    if thumb:
+                        print(f"✅ Successfully found thumbnail for {coin_name}")
+                        return {'coin': coin_name, 'thumb': thumb, 'status': 'success'}
+                
+                print(f"❌ No thumbnail found for {coin_name}")
+                return {'coin': coin_name, 'thumb': 'not found', 'status': 'not_found'}
+            
+            print(f"❌ Failed to fetch data for {coin_name}. Status code: {response.status_code}")
+            return {'coin': coin_name, 'thumb': 'not found', 'status': 'not_found'}
+        
+        except requests.RequestException as e:
+            print(f"❌ Request error for {coin_name}: {str(e)}")
+            return {'coin': coin_name, 'thumb': 'error', 'error': str(e), 'status': 'error'}
+    
+    except Exception as e:
+        print(f"❌ Unexpected error for {coin_name}: {str(e)}")
+        return {'coin': coin_name, 'thumb': 'error', 'error': str(e), 'status': 'error'}
+
+def process_coins_sequentially(coins):
+    """Process coins sequentially"""
+    results = []
+    success_count = 0
+    not_found_count = 0
+    error_count = 0
+    
+    for i, coin in enumerate(coins, 1):
+        result = get_coin_thumb(coin)
+        results.append(result)
+        
+        # Update counts based on status
+        if result['status'] == 'success':
+            success_count += 1
+        elif result['status'] == 'not_found':
+            not_found_count += 1
+        else:
+            error_count += 1
+        
+        # Optional: Print progress with success ratio
+        print(f"Progress: {i}/{len(coins)} coins processed | Success: {success_count}/{i} ({(success_count/i)*100:.1f}%)")
+    
+    return results, success_count, not_found_count, error_count
+
+@app.route('/crypto/test/<coin>')
+def test_coin(coin):
+    """Test endpoint to check single coin"""
+    result = get_coin_thumb(coin)
+    return jsonify({
+        'coin': coin,
+        'result': result,
+        'timestamp': time.time()
+    })
+
+@app.route('/crypto/start')
+def fetch_thumbs():
+    """Start fetching thumbnails sequentially"""
+    total_start_time = time.time()
+    
+    try:
+        # Get coins list
+        print("Fetching list of coins...")
+        response = requests.get('https://api.moometrics.io/news/youtube/coins/names')
+        coins = response.json()['data']['coins']
+        print(f"Total coins to process: {len(coins)}")
+        
+        # Process coins
+        results, success_count, not_found_count, error_count = process_coins_sequentially(coins)
+        
+        # Store in cache
+        cache_data = {
+            'results': results,
+            'total_coins': len(coins),
+            'successful': success_count,
+            'not_found': not_found_count,
+            'errors': error_count
+        }
+        _thumbs_cache.set(cache_data)
+        
+        total_time = time.time() - total_start_time
+        
+        return jsonify({
+            "execution_time": f"{total_time:.2f} seconds",
+            "total_coins": len(coins),
+            "successful": success_count,
+            "not_found": not_found_count,
+            "errors": error_count,
+            "success_rate": f"{(success_count/len(coins))*100:.1f}%",
+            "results": results
+        })
+        
+    except Exception as e:
+        print(f"Error during thumbnail fetch: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/crypto/get')
+def get_thumbs():
+    """Get cached thumbnails"""
+    cached_data = _thumbs_cache.get()
+    if cached_data:
+        return jsonify(cached_data)
+    return jsonify({"message": "No data. Run /crypto/start first"}), 404
 
 
 if __name__ == '__main__':
