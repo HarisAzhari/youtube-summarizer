@@ -169,7 +169,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=9, minute=50, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=58, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -5374,7 +5374,7 @@ def get_market_analysis():
             rows = c.fetchall()
             analyses = []
             
-            for row in dict(row):
+            for row in rows:  # Corrected this line
                 analysis = {
                     "symbol": row['symbol'],
                     "name": row['name'],
@@ -5555,174 +5555,7 @@ import random
 def remove_backticks(text):
     """Remove three consecutive backticks from the text."""
     return text.replace('```', '').replace('`', '')
-@app.route('/answer-detailed', methods=['POST'])
-def answer_detailed():
-    try:
-        # Get the question from request body
-        request_data = request.get_json()
-        if not request_data or 'question' not in request_data:
-            return jsonify({
-                "error": "Please provide a question in the request body",
-                "status": "error"
-            }), 400
 
-        question = request_data['question']
-        print(f"Received question: {question}")
-
-        # Use Gemini to identify relevant keywords and analyze the question
-        print("Analyzing question with Gemini...")
-        api_key = "AIzaSyBVaovh2Cz9LU7gUJ_ft00UBEv26_vaaC0"
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-pro')
-
-        analysis_prompt = f"""
-        Given this question: "{question}"
-        
-        Identify the most important keywords or concepts that would help find relevant information in an Islamic text.
-        Return your response in this JSON format:
-        {{
-            "keywords": ["keyword1", "keyword2", ...]
-        }}
-
-        Do not include any backticks or markdown formatting in your response.
-        """
-
-        print("Sending analysis prompt to Gemini...")
-        keywords_response = model.generate_content(analysis_prompt)
-        
-        # Clean the response - remove backticks and any extra whitespace
-        cleaned_response = keywords_response.text.replace('```', '').strip()
-        
-        # Attempt to parse the cleaned response
-        keywords_data = json.loads(cleaned_response)
-        keywords = keywords_data.get('keywords', [])
-        print(f"Keywords identified: {keywords}")
-
-        # Read arab.json
-        print("Reading arab.json file...")
-        try:
-            with open('arab.json', 'r', encoding='utf-8') as f:
-                arab_data = json.load(f)
-        except Exception as e:
-            print(f"Error reading arab.json: {str(e)}")
-            return jsonify({
-                "error": "Error reading arab.json file",
-                "status": "error"
-            }), 500
-
-        # Search through arab.json for relevant content based on keywords
-        relevant_entries = []
-        for entry in arab_data:
-            analysis_text = entry.get('analysis')
-            if analysis_text and any(keyword.lower() in analysis_text.lower() for keyword in keywords):
-                relevant_entries.append({
-                    "page_number": entry["page_number"],
-                    "analysis": analysis_text
-                })
-
-        # Randomly select 5 entries if there are enough relevant entries
-        selected_entries = random.sample(relevant_entries, min(5, len(relevant_entries)))
-
-        if not selected_entries:
-            print("No relevant content found")
-            return jsonify({
-                "status": "no_results",
-                "message": "No relevant content found for your question"
-            })
-
-        # Use Gemini to generate a final answer based on the found content
-        print("Generating final answer...")
-        answer_prompt = f"""
-        Question: {question}
-
-        Based on these relevant excerpts from an Islamic text:
-
-        {json.dumps(selected_entries, indent=2)}
-
-        Please provide:
-        1. A direct answer to the question
-        2. The specific pages where this information was found
-        3. Any additional context that might be helpful
-        4. DO NOT STATE WHERE YOU GOT THE ANSWER FROM ESPECIALLY IF YOU GOT IT FROM THE BATCH. Provide insights and information from the text.
-        5. Start your answer with "Answer: "
-        6. Do not ever mention put the word batch in the answer and number of batches.
-        7. DON'T START UR ANSWER WITH YES. Don't use pronoun
-        """
-
-        final_answer = model.generate_content(answer_prompt)
-
-        # Debugging: Log the raw final answer response
-        print(f"Final answer response: {final_answer.text}")
-
-        # Remove backticks from the final answer
-        cleaned_answer = remove_backticks(final_answer.text)
-
-        # Display the cleaned final answer in the print statement
-        print(f"Final answer generated: {cleaned_answer}")
-        
-        return jsonify({
-            "status": "success",
-            "question": question,
-            "keywords_used": keywords,
-            "relevant_entries": selected_entries,  # Use the selected entries in the JSON response
-            "answer": cleaned_answer  # Use the cleaned answer in the JSON response
-        })
-
-    except Exception as e:
-        print(f"Error in /answer-detailed endpoint: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "status": "error"
-        }), 500
-
-@app.route('/arab', methods=['POST'])
-def arab():
-    try:
-        # Get the page number from the request body
-        request_data = request.get_json()
-        if not request_data or 'page_number' not in request_data:
-            return jsonify({
-                "error": "Please provide a page number in the request body",
-                "status": "error"
-            }), 400
-
-        page_number = request_data['page_number']
-        print(f"Received page number: {page_number}")
-
-        # Read arab.json
-        print("Reading arab.json file...")
-        try:
-            with open('arab.json', 'r', encoding='utf-8') as f:
-                arab_data = json.load(f)
-        except Exception as e:
-            print(f"Error reading arab.json: {str(e)}")
-            return jsonify({
-                "error": "Error reading arab.json file",
-                "status": "error"
-            }), 500
-
-        # Find the entry with the specified page number
-        entry = next((entry for entry in arab_data if entry["page_number"] == page_number), None)
-
-        if entry is None:
-            return jsonify({
-                "status": "no_results",
-                "message": f"No content found for page number {page_number}"
-            })
-
-        # Here you can map the entry to the response directly
-        return jsonify({
-            "status": "success",
-            "page_number": page_number,
-            "entry": entry
-        })
-
-    except Exception as e:
-        print(f"Error in /arab endpoint: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "status": "error"
-        }), 500
 
 if __name__ == '__main__':
     init_db()
