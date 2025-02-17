@@ -2500,27 +2500,50 @@ def get_unique_coins_with_stats():
             "message": str(e)
         }), 500
 
+
 @app.route('/youtube/coins/names')
 def get_coin_names():
-    """Get just the list of unique coin names"""
+    """Get just the list of unique coin names with edit history applied"""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             c = conn.cursor()
             
-            # Simple query to get just unique coin names
+            # First get all coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row[0]: row[1] for row in c.fetchall()}
+            
+            # Get unique coin names
             c.execute('''
                 SELECT DISTINCT coin_mentioned
                 FROM coin_analysis 
                 ORDER BY coin_mentioned ASC
             ''')
             
-            coins = [row[0] for row in c.fetchall()]
+            # Apply name overrides
+            coins = []
+            for row in c.fetchall():
+                coin_name = row[0]
+                # Use the override if it exists, otherwise use original name
+                final_name = name_mapping.get(coin_name, coin_name)
+                coins.append(final_name)
+            
+            # Remove duplicates that might have been created by overrides
+            unique_coins = sorted(set(coins))
             
             return jsonify({
                 "status": "success",
                 "data": {
-                    "coins": coins,
-                    "total": len(coins)
+                    "coins": unique_coins,
+                    "total": len(unique_coins),
+                    "metadata": {
+                        "overrides_applied": len(name_mapping)
+                    }
                 }
             })
             
