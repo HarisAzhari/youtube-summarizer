@@ -2717,6 +2717,16 @@ def get_todays_channel_analysis(date):
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
+            # First get all coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
             # Get Malaysia timezone (UTC+8)
             malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
             
@@ -2769,20 +2779,24 @@ def get_todays_channel_analysis(date):
                     }
                 })
             
-            # Format the response
+            # Format the response with name overrides
             reasons = []
             coins_mentioned = set()
             
             for row in rows:
                 try:
                     parsed_reasons = json.loads(row['reasons'])
+                    
+                    # Apply name override if exists
                     coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
                     
                     coins_mentioned.add(coin_name)
                     
                     for reason in parsed_reasons:
                         reasons.append({
-                            "coin": coin_name,
+                            "coin": coin_name,  # Using overridden name
                             "reason": reason,
                             "sentiment": row['indicator'],
                             "source": {
@@ -2797,7 +2811,7 @@ def get_todays_channel_analysis(date):
                     print(f"Error parsing reasons for video {row['video_id']}: {str(e)}")
                     continue
             
-            # Calculate statistics
+            # Calculate statistics with overridden names
             statistics = {
                 "total_videos": len(set(row['video_id'] for row in rows)),
                 "total_coins": len(coins_mentioned),
@@ -2805,7 +2819,8 @@ def get_todays_channel_analysis(date):
                 "coins_breakdown": {
                     coin: len([r for r in reasons if r['coin'] == coin])
                     for coin in coins_mentioned
-                }
+                },
+                "name_overrides_applied": len(name_mapping)  # Added for transparency
             }
             
             return jsonify({
@@ -2813,7 +2828,14 @@ def get_todays_channel_analysis(date):
                 "data": {
                     "date": date,
                     "reasons": reasons,
-                    "statistics": statistics
+                    "statistics": statistics,
+                    "metadata": {
+                        "timezone": "Asia/Kuala_Lumpur",
+                        "period": {
+                            "start": start_utc,
+                            "end": end_utc
+                        }
+                    }
                 }
             })
             
@@ -3563,8 +3585,9 @@ def drop_sector_analysis():
             "message": str(e)
         }), 500
 
-@app.route('/youtube/today-analysis/<date>')
-def get_todays_channel_analysis(date):
+@app.route('/youtube/today-coins/<date>')
+def get_coins_by_date(date):
+    """Get coin mention counts for a specific date (Malaysia timezone) with edit history applied"""
     try:
         # Validate date format
         try:
@@ -3596,113 +3619,129 @@ def get_todays_channel_analysis(date):
             start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
             end_my = start_my.replace(hour=23, minute=59, second=59)
             
-            # Convert to UTC for database query
-            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            # Convert to UTC for database query (subtract 8 hours since DB is in UTC)
+            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC)
+            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC)
             
-            # Query with UTC timestamp range
+            # Query with explicit timezone conversion in SQL
             c.execute('''
-                WITH video_analyses AS (
+                WITH video_times AS (
                     SELECT 
-                        v.channel_name,
-                        v.channel_id,
                         v.video_id,
-                        v.title as video_title,
-                        v.url as video_url,
-                        v.thumbnail_url,
-                        v.views,
+                        v.channel_name,
                         v.published_at,
-                        v.processed_at,
+                        datetime(v.published_at, '+8 hours') as my_time,
                         ca.coin_mentioned,
-                        ca.reasons,
                         ca.indicator
                     FROM videos v
-                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
-                    WHERE v.published_at BETWEEN ? AND ?
-                    AND ca.coin_mentioned IS NOT NULL
+                    JOIN coin_analysis ca ON v.video_id = ca.video_id
                 )
-                SELECT * FROM video_analyses
-                ORDER BY published_at DESC
-            ''', (start_utc, end_utc))
+                SELECT *
+                FROM video_times
+                WHERE date(my_time) = ?
+            ''', (date,))
             
-            rows = c.fetchall()
+            mentions = [dict(row) for row in c.fetchall()]
             
-            if not rows:
+            if not mentions:
                 return jsonify({
                     "status": "success",
                     "data": {
                         "date": date,
-                        "reasons": [],
-                        "statistics": {
-                            "total_videos": 0,
-                            "total_coins": 0,
-                            "total_reasons": 0
+                        "total_unique_coins": 0,
+                        "coins": [],
+                        "metadata": {
+                            "timezone": "Asia/Kuala_Lumpur",
+                            "period": {
+                                "start": start_utc.isoformat(),
+                                "end": end_utc.isoformat()
+                            }
                         }
                     }
                 })
+
+            # Process mentions with name overrides
+            coin_stats = {}
+            for mention in mentions:
+                # Apply name override if exists
+                coin_name = mention['coin_mentioned']
+                if coin_name in name_mapping:
+                    coin_name = name_mapping[coin_name]
+                
+                if coin_name not in coin_stats:
+                    coin_stats[coin_name] = {
+                        "coin_mentioned": coin_name,
+                        "total_mentions": 0,
+                        "unique_mentions": 0,
+                        "video_ids": set(),
+                        "channels": set(),
+                        "channel_mentions": {},
+                        "sentiment_counts": {
+                            "bullish": 0,
+                            "bearish": 0,
+                            "neutral": 0
+                        }
+                    }
+                
+                stats = coin_stats[coin_name]
+                stats["total_mentions"] += 1
+                stats["video_ids"].add(mention["video_id"])
+                
+                # Track channel-specific mentions
+                channel = mention["channel_name"]
+                if channel not in stats["channel_mentions"]:
+                    stats["channel_mentions"][channel] = 0
+                    stats["unique_mentions"] += 1
+                stats["channel_mentions"][channel] += 1
+                stats["channels"].add(channel)
+                
+                # Track sentiment counts
+                indicator = mention["indicator"].lower()
+                if "bullish" in indicator:
+                    stats["sentiment_counts"]["bullish"] += 1
+                elif "bearish" in indicator:
+                    stats["sentiment_counts"]["bearish"] += 1
+                else:
+                    stats["sentiment_counts"]["neutral"] += 1
+
+            # Format the final response
+            formatted_coins = []
+            for coin_name, stats in coin_stats.items():
+                formatted_coins.append({
+                    "coin_mentioned": coin_name,
+                    "total_mentions": stats["total_mentions"],
+                    "unique_channel_mentions": stats["unique_mentions"],
+                    "video_count": len(stats["video_ids"]),
+                    "channel_count": len(stats["channels"]),
+                    "sentiment": stats["sentiment_counts"],  # Now using raw counts instead of percentages
+                    "channel_breakdown": {
+                        channel: count 
+                        for channel, count in stats["channel_mentions"].items()
+                    }
+                })
             
-            # Format the response with name overrides
-            reasons = []
-            coins_mentioned = set()
-            
-            for row in rows:
-                try:
-                    parsed_reasons = json.loads(row['reasons'])
-                    
-                    # Apply name override if exists
-                    coin_name = row['coin_mentioned']
-                    if coin_name in name_mapping:
-                        coin_name = name_mapping[coin_name]
-                    
-                    coins_mentioned.add(coin_name)
-                    
-                    for reason in parsed_reasons:
-                        reasons.append({
-                            "coin": coin_name,  # Using overridden name
-                            "reason": reason,
-                            "sentiment": row['indicator'],
-                            "source": {
-                                "channel": row['channel_name'],
-                                "video_title": row['video_title'],
-                                "video_url": row['video_url'],
-                                "published_at": row['published_at'],
-                                "processed_at": row['processed_at']
-                            }
-                        })
-                except Exception as e:
-                    print(f"Error parsing reasons for video {row['video_id']}: {str(e)}")
-                    continue
-            
-            # Calculate statistics with overridden names
-            statistics = {
-                "total_videos": len(set(row['video_id'] for row in rows)),
-                "total_coins": len(coins_mentioned),
-                "total_reasons": len(reasons),
-                "coins_breakdown": {
-                    coin: len([r for r in reasons if r['coin'] == coin])
-                    for coin in coins_mentioned
-                },
-                "name_overrides_applied": len(name_mapping)  # Added for transparency
-            }
-            
+            # Sort by unique channel mentions first, then total mentions
+            formatted_coins.sort(key=lambda x: (x["unique_channel_mentions"], x["total_mentions"]), reverse=True)
+
             return jsonify({
                 "status": "success",
                 "data": {
                     "date": date,
-                    "reasons": reasons,
-                    "statistics": statistics,
+                    "total_unique_coins": len(formatted_coins),
+                    "coins": formatted_coins,
                     "metadata": {
                         "timezone": "Asia/Kuala_Lumpur",
                         "period": {
-                            "start": start_utc,
-                            "end": end_utc
-                        }
+                            "start": start_utc.isoformat(),
+                            "end": end_utc.isoformat()
+                        },
+                        "name_overrides_applied": len(name_mapping)
                     }
                 }
             })
             
     except Exception as e:
-        print(f"Error in get_todays_channel_analysis: {str(e)}")
+        print(f"Error in get_coins_by_date: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
