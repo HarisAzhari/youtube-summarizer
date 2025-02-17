@@ -6132,13 +6132,22 @@ def get_coin_trend():
 
 @app.route('/youtube/mentions/<date>')
 def get_daily_coin_mentions(date):
-    """Get simple list of coins mentioned on a specific date (Malaysia time)"""
+    """Get simple list of coins mentioned from today-analysis data"""
     try:
+        # Validate date format
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid date format. Please use YYYY-MM-DD"
+            }), 400
+
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             
-            # Get coin name overrides
+            # First get all coin name overrides
             c.execute('''
                 SELECT 
                     current_name,
@@ -6148,34 +6157,39 @@ def get_daily_coin_mentions(date):
             ''')
             name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
             
-            # Get ALL videos and their published times
+            # Get Malaysia timezone (UTC+8)
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            
+            # Set the target date range in Malaysia time
+            start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_my = start_my.replace(hour=23, minute=59, second=59)
+            
+            # Convert to UTC for database query
+            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Use the same query
             c.execute('''
-                SELECT DISTINCT
-                    ca.coin_mentioned,
-                    v.published_at
-                FROM videos v
-                JOIN coin_analysis ca ON v.video_id = ca.video_id
-            ''')
+                WITH video_analyses AS (
+                    SELECT DISTINCT coin_mentioned
+                    FROM videos v
+                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
+                    WHERE v.published_at BETWEEN ? AND ?
+                    AND ca.coin_mentioned IS NOT NULL
+                )
+                SELECT * FROM video_analyses
+            ''', (start_utc, end_utc))
             
-            # Process dates in Python
+            # Get all coins and apply name mapping
             coins = []
-            target_date = datetime.strptime(date, '%Y-%m-%d').date()
-            print("Target: ", target_date)
-            
             for row in c.fetchall():
-                # Convert UTC to Malaysia time
-                utc_time = datetime.strptime(row['published_at'], '%Y-%m-%dT%H:%M:%S%z')
-                malaysia_time = utc_time + timedelta(hours=8)
-                
-                # Check if the Malaysia date matches our target
-                if malaysia_time.date() == target_date:
-                    coin_name = row['coin_mentioned']
-                    if coin_name in name_mapping:
-                        coin_name = name_mapping[coin_name]
-                    if coin_name not in coins:  # Avoid duplicates
-                        coins.append(coin_name)
+                coin_name = row['coin_mentioned']
+                if coin_name in name_mapping:
+                    coin_name = name_mapping[coin_name]
+                if coin_name not in coins:
+                    coins.append(coin_name)
             
-            coins.sort()  # Keep the list sorted
+            coins.sort()  # Keep it sorted
             
             return jsonify({
                 "status": "success",
