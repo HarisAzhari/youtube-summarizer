@@ -22,8 +22,7 @@ import pandas as pd
 import datetime as dt
 import joblib
 import pickle
-from google import genai
-from google.genai import types
+import google.generativeai as palm
 import re
 from statsmodels.tsa.arima.model import ARIMA
 from enum import Enum
@@ -6461,13 +6460,14 @@ def market_summary_today():
     
 
 # Configure Gemini clients
+# Configure Gemini clients
 EMBEDDING_API_KEY = "AIzaSyAJkVH1OkkhIJIvkQ4_zj7MvbwOgcvJifA"
 GEMINI_API_KEY = "AIzaSyAOogW_ZTPgDniIc0ecGSQk_4L9U_y7dno"
 GEMINI_API_KEY_2 = "AIzaSyBxeQKYExn_2Mu2wkg9ExfQr_yn7RiJ6Ow"
 GENERAL_API_KEY = "AIzaSyDNWfFmywWgydEI0NxL9xbCTjdlnYlOoKE"
 
-# Configure the API
-genai.configure(api_key=EMBEDDING_API_KEY)
+# Initialize the API
+palm.configure(api_key=EMBEDDING_API_KEY)
 
 def clean_frontend_query(query: str) -> str:
     patterns = [
@@ -6485,9 +6485,8 @@ def clean_frontend_query(query: str) -> str:
 
 def get_embeddings(text: str):
     try:
-        model = genai.get_model('models/text-embedding-004')
-        result = model.embedContent(text)
-        return result.embedding
+        result = palm.generate_embeddings(text=text)
+        return result['embedding']
     except Exception as e:
         print(f"Error generating embedding: {str(e)}")
         return None
@@ -6530,8 +6529,8 @@ def get_similar_texts(query: str, top_k: int = 5):
     return results[:top_k], cleaned_query
 
 def generate_content(prompt: str, api_key: str):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    palm.configure(api_key=api_key)
+    model = palm.GenerativeModel('gemini-2.0-flash')
     response = model.generate_content(prompt)
     return response.text
 
@@ -6743,7 +6742,7 @@ Please analyze these texts and provide a response in the following JSON format:
 }}"""
 
     try:
-        response = genai.Client(api_key=GEMINI_API_KEY_2).models.generate_content(
+        response = palm.Client(api_key=GEMINI_API_KEY_2).models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt
         )
@@ -6840,7 +6839,7 @@ def handle_general_query():
         return jsonify({"error": "Query parameter is required"}), 400
 
     try:
-        genai.configure(api_key=GENERAL_API_KEY)
+        palm.configure(api_key=GENERAL_API_KEY)
         
         answer_prompt = f"""As an Islamic scholar, what you get is a formulated question. Just directly answer the question in general. Make sure at least there's some detailness".
 
