@@ -36,11 +36,9 @@ def clean_frontend_query(query: str) -> str:
 
 def get_embeddings(text: str):
     try:
-        result = genai.models.embed_content(
-            model="text-embedding-004",
-            contents=text
-        )
-        return result.embeddings
+        model = genai.get_model('models/text-embedding-004')
+        result = model.embed_content(text)
+        return result.embedding
     except Exception as e:
         print(f"Error generating embedding: {str(e)}")
         return None
