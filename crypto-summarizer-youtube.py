@@ -6487,11 +6487,17 @@ def get_embeddings(text: str):
     try:
         # Configure the model
         genai.configure(api_key=EMBEDDING_API_KEY)
-        model = genai.GenerativeModel('text-embedding-004')  # Use the embedding model
         
-        # Generate embeddings
-        result = model.embed_content(text=text)
-        return result.embedding
+        # Generate embeddings using the correct method
+        embedding = genai.embed_content(
+            model="models/embedding-001",
+            content=text,
+            task_type="retrieval_document"
+        )
+        
+        # Return the embedding values
+        return embedding['embedding']
+        
     except Exception as e:
         print(f"Error generating embedding: {str(e)}")
         return None
