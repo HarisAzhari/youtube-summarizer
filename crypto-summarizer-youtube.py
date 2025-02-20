@@ -8,7 +8,6 @@ import requests
 import pytz
 import time
 from youtube_transcript_api import YouTubeTranscriptApi
-import google.generativeai as genai
 from tqdm import tqdm
 import json
 from flask_cors import CORS
