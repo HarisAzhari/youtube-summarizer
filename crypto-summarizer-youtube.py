@@ -33,6 +33,7 @@ import traceback
 from functools import wraps
 from historical_price import HistoricalPriceService
 from dataclasses import dataclass
+import re
 
 app = Flask(__name__)
 CORS(app, resources={
