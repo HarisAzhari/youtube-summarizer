@@ -6466,11 +6466,6 @@ GENERAL_API_KEY = "AIzaSyDNWfFmywWgydEI0NxL9xbCTjdlnYlOoKE"
 # Configure the API
 genai.configure(api_key=EMBEDDING_API_KEY)
 
-embedding_client = genai.Client(api_key=EMBEDDING_API_KEY)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-gemini_client_2 = genai.Client(api_key=GEMINI_API_KEY_2)
-general_client = genai.Client(api_key=GENERAL_API_KEY)
-
 def clean_frontend_query(query: str) -> str:
     patterns = [
         r"^Are you asking about ",
@@ -6745,7 +6740,7 @@ Please analyze these texts and provide a response in the following JSON format:
 }}"""
 
     try:
-        response = gemini_client_2.models.generate_content(
+        response = genai.Client(api_key=GEMINI_API_KEY_2).models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt
         )
