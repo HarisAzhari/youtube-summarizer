@@ -22,6 +22,9 @@ import pandas as pd
 import datetime as dt
 import joblib
 import pickle
+from google import genai
+from google.genai import types
+import re
 from statsmodels.tsa.arima.model import ARIMA
 from enum import Enum
 import logging
@@ -6463,8 +6466,10 @@ GEMINI_API_KEY = "AIzaSyAOogW_ZTPgDniIc0ecGSQk_4L9U_y7dno"
 GEMINI_API_KEY_2 = "AIzaSyBxeQKYExn_2Mu2wkg9ExfQr_yn7RiJ6Ow"
 GENERAL_API_KEY = "AIzaSyDNWfFmywWgydEI0NxL9xbCTjdlnYlOoKE"
 
-# Configure the API
-genai.configure(api_key=EMBEDDING_API_KEY)
+embedding_client = genai.Client(api_key=EMBEDDING_API_KEY)
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+gemini_client_2 = genai.Client(api_key=GEMINI_API_KEY_2)
+general_client = genai.Client(api_key=GENERAL_API_KEY)
 
 def clean_frontend_query(query: str) -> str:
     patterns = [
@@ -6482,9 +6487,11 @@ def clean_frontend_query(query: str) -> str:
 
 def get_embeddings(text: str):
     try:
-        model = genai.get_model('models/text-embedding-004')  # Added 'models/' prefix
-        result = model.embed_content(text)
-        return result.embedding
+        result = embedding_client.models.embed_content(
+            model="text-embedding-004",
+            contents=text
+        )
+        return result.embeddings[0].values
     except Exception as e:
         print(f"Error generating embedding: {str(e)}")
         return None
@@ -6525,12 +6532,6 @@ def get_similar_texts(query: str, top_k: int = 5):
     
     results.sort(key=lambda x: x['similarity'], reverse=True)
     return results[:top_k], cleaned_query
-
-def generate_content(prompt: str, api_key: str):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    response = model.generate_content(prompt)
-    return response.text
 
 def analyze_first_three(results):
     """Analyze definition, ruling, and evidence"""
@@ -6629,7 +6630,11 @@ Please analyze these texts and provide a response in the following JSON format:
 }}"""
 
     try:
-        response_text = generate_content(prompt, GEMINI_API_KEY)
+        response = gemini_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        response_text = response.text
         if '```json' in response_text:
             json_str = response_text.split('```json')[1].split('```')[0].strip()
         elif '```' in response_text:
@@ -6740,7 +6745,7 @@ Please analyze these texts and provide a response in the following JSON format:
 }}"""
 
     try:
-        response = genai.Client(api_key=GEMINI_API_KEY_2).models.generate_content(
+        response = gemini_client_2.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt
         )
@@ -6837,25 +6842,31 @@ def handle_general_query():
         return jsonify({"error": "Query parameter is required"}), 400
 
     try:
-        genai.configure(api_key=GENERAL_API_KEY)
-        
+        # First get the answer
         answer_prompt = f"""As an Islamic scholar, what you get is a formulated question. Just directly answer the question in general. Make sure at least there's some detailness".
 
 This is the question user clicked that he wants to know about: {data['query']}
 
 Return only the answer not another question, don't start the question with yes or no. Directly answer the question. Nothing else."""
 
-        answer_response = generate_content(answer_prompt, GENERAL_API_KEY)
+        answer_response = general_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=answer_prompt
+        )
 
+        # Then extract keywords
         keyword_prompt = f"""From this Islamic question: "{data['query']}"
 Extract only the most important keywords related to Islamic terms, concepts, or practices. 
 Return just 2-4 keywords separated by spaces, nothing else. For example: "wudu prayer fasting" """
 
-        keyword_response = generate_content(keyword_prompt, GENERAL_API_KEY)
+        keyword_response = general_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=keyword_prompt
+        )
         
         return jsonify({
-            "query": answer_response,
-            "keyword": keyword_response
+            "query": answer_response.text,
+            "keyword": keyword_response.text
         })
 
     except Exception as e:
