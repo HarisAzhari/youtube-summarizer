@@ -6485,8 +6485,13 @@ def clean_frontend_query(query: str) -> str:
 
 def get_embeddings(text: str):
     try:
-        result = palm.generate_embeddings(text=text)
-        return result['embedding']
+        # Configure the model
+        genai.configure(api_key=EMBEDDING_API_KEY)
+        model = genai.GenerativeModel('text-embedding-004')  # Use the embedding model
+        
+        # Generate embeddings
+        result = model.embed_content(text=text)
+        return result.embedding
     except Exception as e:
         print(f"Error generating embedding: {str(e)}")
         return None
