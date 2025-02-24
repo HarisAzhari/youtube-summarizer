@@ -6733,17 +6733,10 @@ def run_draft():
                 "message": f"Price data error: {str(price_error)}"
             }), 500
 
-        # Configure Gemini
+        # Configure Gemini with direct API key
         try:
             print("\n🤖 Configuring Gemini model...")
-            api_key = os.getenv('GEMINI_API_KEY_1')
-            if not api_key:
-                print("❌ GEMINI_API_KEY_1 not found in environment variables")
-                return jsonify({
-                    "status": "error",
-                    "message": "GEMINI_API_KEY_1 not found"
-                }), 500
-                
+            api_key = "AIzaSyBVaovh2Cz9LU7gUJ_ft00UBEv26_vaaC0"
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name=data['gemini_model'])
             print(f"✅ Configured model: {data['gemini_model']}")
