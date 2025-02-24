@@ -173,7 +173,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=58, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=55, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -455,7 +455,7 @@ def check_recent_videos(playlist_id, api_key, channel_info):
     videos = []
     next_page_token = None
     now = datetime.now(pytz.UTC)
-    day_ago = now - timedelta(days=3)
+    day_ago = now - timedelta(days=5)
     
     while True:
         base_url = f"https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={playlist_id}&maxResults=50&key={api_key}"
@@ -2504,11 +2504,29 @@ def get_unique_coins_with_stats():
             "message": str(e)
         }), 500
 
+# At the top of the file, add this cache variable
+COIN_NAMES_CACHE = {
+    "timestamp": None,
+    "data": None,
+    "cache_duration": timedelta(hours=1)  # Cache for 1 hour
+}
 
 @app.route('/youtube/coins/names')
 def get_coin_names():
     """Get just the list of unique coin names with edit history applied"""
     try:
+        global COIN_NAMES_CACHE
+        current_time = datetime.now()
+
+        # Check if we have valid cached data
+        if (COIN_NAMES_CACHE["timestamp"] and 
+            COIN_NAMES_CACHE["data"] and 
+            current_time - COIN_NAMES_CACHE["timestamp"] < COIN_NAMES_CACHE["cache_duration"]):
+            print("✨ Returning cached coin names")
+            return jsonify(COIN_NAMES_CACHE["data"])
+
+        print("🔄 Cache expired or empty, fetching fresh coin names")
+        
         with sqlite3.connect(DB_PATH) as conn:
             c = conn.cursor()
             
@@ -2521,6 +2539,7 @@ def get_coin_names():
                 ORDER BY edited_at DESC
             ''')
             name_mapping = {row[0]: row[1] for row in c.fetchall()}
+            print(f"📝 Found {len(name_mapping)} name overrides")
             
             # Get unique coin names
             c.execute('''
@@ -2539,20 +2558,30 @@ def get_coin_names():
             
             # Remove duplicates that might have been created by overrides
             unique_coins = sorted(set(coins))
+            print(f"🪙 Found {len(unique_coins)} unique coins")
             
-            return jsonify({
+            response_data = {
                 "status": "success",
                 "data": {
                     "coins": unique_coins,
                     "total": len(unique_coins),
                     "metadata": {
-                        "overrides_applied": len(name_mapping)
+                        "overrides_applied": len(name_mapping),
+                        "cached_at": current_time.isoformat(),
+                        "cache_expires": (current_time + COIN_NAMES_CACHE["cache_duration"]).isoformat()
                     }
                 }
-            })
+            }
+            
+            # Update cache
+            COIN_NAMES_CACHE["timestamp"] = current_time
+            COIN_NAMES_CACHE["data"] = response_data
+            print("💾 Updated coin names cache")
+            
+            return jsonify(response_data)
             
     except Exception as e:
-        print(f"Error in get_coin_names: {str(e)}")
+        print(f"❌ Error in get_coin_names: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
@@ -4039,7 +4068,9 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-02-20"
+            "2025-02-22",
+            "2025-02-23",
+            "2025-02-24",
         ]
         
         # Configure Gemini
@@ -6457,425 +6488,497 @@ def market_summary_today():
             "message": "An unexpected error occurred",
             "details": str(e)
         }), 500
-    
 
-# Configure Gemini clients
-# Configure Gemini clients
-EMBEDDING_API_KEY = "AIzaSyAJkVH1OkkhIJIvkQ4_zj7MvbwOgcvJifA"
-GEMINI_API_KEY = "AIzaSyAOogW_ZTPgDniIc0ecGSQk_4L9U_y7dno"
-GEMINI_API_KEY_2 = "AIzaSyBxeQKYExn_2Mu2wkg9ExfQr_yn7RiJ6Ow"
-GENERAL_API_KEY = "AIzaSyDNWfFmywWgydEI0NxL9xbCTjdlnYlOoKE"
 
-# Initialize the API
-palm.configure(api_key=EMBEDDING_API_KEY)
-
-def clean_frontend_query(query: str) -> str:
-    patterns = [
-        r"^Are you asking about ",
-        r"^Would you like to know ",
-        r"^Do you want to learn ",
-        r"^Are you interested in ",
-    ]
-    cleaned = query.lower()
-    for pattern in patterns:
-        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
-    cleaned = cleaned.replace("?", "").replace("the", "").replace("and", "")
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    return cleaned
-
-def get_embeddings(text: str):
+@app.route('/draft', methods=['POST'])
+def save_draft():
+    """Save template editor draft"""
     try:
-        # Configure the model
-        genai.configure(api_key=EMBEDDING_API_KEY)
+        data = request.get_json()
         
-        # Generate embeddings using the correct method
-        embedding = genai.embed_content(
-            model="models/embedding-001",
-            content=text,
-            task_type="retrieval_document"
-        )
-        
-        # Return the embedding values
-        return embedding['embedding']
-        
-    except Exception as e:
-        print(f"Error generating embedding: {str(e)}")
-        return None
-
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-def get_similar_texts(query: str, top_k: int = 5):
-    """Shared function to get similar texts"""
-    try:
-        with open("validated_content/embedded_toharoh_entries.json", 'r', encoding='utf-8') as f:
-            toharoh_data = json.load(f)
-            # Flatten the madhab-structured data
-            embedded_entries = []
-            for madhab, entries in toharoh_data.items():
-                for entry in entries:
-                    entry['madhab'] = madhab  # Add madhab info to entry
-                    embedded_entries.append(entry)
-    except FileNotFoundError:
-        return None, "Database file not found"
-    
-    cleaned_query = clean_frontend_query(query)
-    query_embedding = get_embeddings(cleaned_query)
-    
-    if not query_embedding:
-        return None, "Failed to generate embeddings"
-    
-    results = []
-    for entry in embedded_entries:
-        similarity = cosine_similarity(query_embedding, entry['english_translation_embedding'])
-        results.append({
-            'madhab': entry['madhab'],
-            'page': entry['page_number'],
-            'similarity': similarity,
-            'arabic': entry['arabic_text'],
-            'english': entry['english_translation']
-        })
-    
-    results.sort(key=lambda x: x['similarity'], reverse=True)
-    return results[:top_k], cleaned_query
-
-def generate_content(prompt: str, api_key: str):
-    palm.configure(api_key=api_key)
-    model = palm.GenerativeModel('gemini-2.0-flash')
-    response = model.generate_content(prompt)
-    return response.text
-
-def analyze_first_three(results):
-    """Analyze definition, ruling, and evidence"""
-    content_for_analysis = "Analyze these Islamic texts for definition, ruling, and evidence:\n\n"
-    for idx, result in enumerate(results, 1):
-        content_for_analysis += f"Text {idx}:\nOriginal:\n{result['arabic']}\n\nTranslation:\n{result['english']}\n\nPage: {result['page']}\n\n"
-
-    prompt = f"""{content_for_analysis}
-Please analyze these texts and provide a response in the following JSON format:
-{{
-    "definition": {{
-        "explanation": "General explanation of the concept",
-        "schools": [
-            {{
-                "name": "Hanafi",
-                "definition": "How the Hanafi school defines this concept",
-                "source": "Text number and page reference if available, otherwise 'No specific definition found'"
-            }},
-            {{
-                "name": "Maliki",
-                "definition": "How the Maliki school defines this concept",
-                "source": "Text number and page reference if available, otherwise 'No specific definition found'"
-            }},
-            {{
-                "name": "Shafi",
-                "definition": "How the Shafi school defines this concept",
-                "source": "Text number and page reference if available, otherwise 'No specific definition found'"
-            }},
-            {{
-                "name": "Hanbali",
-                "definition": "How the Hanbali school defines this concept",
-                "source": "Text number and page reference if available, otherwise 'No specific definition found'"
-            }},
-            {{
-                "name": "OTHER",
-                "definition": "How other schools or scholars define this concept",
-                "source": "Text number and page reference if available, otherwise 'No specific definition found'"
-            }}
-        ]
-    }},
-    "ruling": {{
-        "explanation": "General explanation of the ruling",
-        "schools": [
-            {{
-                "name": "Hanafi",
-                "ruling": "The Hanafi ruling on this matter",
-                "source": "Text number and page reference if available, otherwise 'No specific ruling found'"
-            }},
-            {{
-                "name": "Maliki",
-                "ruling": "The Maliki ruling on this matter",
-                "source": "Text number and page reference if available, otherwise 'No specific ruling found'"
-            }},
-            {{
-                "name": "Shafi",
-                "ruling": "The Shafi ruling on this matter",
-                "source": "Text number and page reference if available, otherwise 'No specific ruling found'"
-            }},
-            {{
-                "name": "Hanbali",
-                "ruling": "The Hanbali ruling on this matter",
-                "source": "Text number and page reference if available, otherwise 'No specific ruling found'"
-            }},
-            {{
-                "name": "OTHER",
-                "ruling": "Rulings from other schools or scholars",
-                "source": "Text number and page reference if available, otherwise 'No specific ruling found'"
-            }}
-        ]
-    }},
-    "evidence": {{
-        "explanation": "Overview of the evidences presented",
-        "schools": [
-            {{
-                "name": "Hanafi",
-                "arabic_text": "Original Arabic/Urdu text supporting this evidence, strictly in arabic/urdu, which is evidence from Hanafi school if not available, return 'No specific evidence found' ",
-                "translation": "English translation of the evidence text"
-            }},
-            {{
-                "name": "Maliki",
-                "arabic_text": "Original Arabic/Urdu text supporting this evidence, strictly in arabic/urdu, which is evidence from Maliki school if not available, return 'No specific evidence found' ",
-                "translation": "English translation of the evidence text"
-            }},
-            {{
-                "name": "Shafi",
-                "arabic_text": "Original Arabic/Urdu text supporting this evidence, strictly in arabic/urdu, which is evidence from Shafi school if not available, return 'No specific evidence found' ",
-                "translation": "English translation of the evidence text"
-            }},
-            {{
-                "name": "Hanbali",
-                "arabic_text": "Original Arabic/Urdu text supporting this evidence, strictly in arabic/urdu, which is evidence from Hanbali school if not available, return 'No specific evidence found' ",
-                "translation": "English translation of the evidence text"
-            }},
-        ]
-    }}
-}}"""
-
-    try:
-        response_text = generate_content(prompt, GEMINI_API_KEY)
-        if '```json' in response_text:
-            json_str = response_text.split('```json')[1].split('```')[0].strip()
-        elif '```' in response_text:
-            json_str = response_text.split('```')[1].strip()
-        else:
-            json_str = response_text.strip()
+        # Create drafts table if it doesn't exist
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
             
-        return json.loads(json_str)
-    except Exception as e:
-        return {"error": "Analysis failed", "message": str(e)}
-
-def analyze_last_three(results):
-    """Analyze reasoning, application, and examples"""
-    content_for_analysis = "Analyze these Islamic texts for reasoning, practical applications, and examples:\n\n"
-    for idx, result in enumerate(results, 1):
-        content_for_analysis += f"Text {idx}:\nOriginal:\n{result['arabic']}\n\nTranslation:\n{result['english']}\n\nPage: {result['page']}\n\n"
-
-    prompt = f"""{content_for_analysis}
-Please analyze these texts and provide a response in the following JSON format:
-{{
-    "reasoning": {{
-        "explanation": "Overview of the underlying wisdom and reasoning",
-        "schools": [
-            {{
-                "name": "Hanafi",
-                "reasoning": "The underlying wisdom according to Hanafi school",
-                "arabic_text": "Original Arabic/Urdu text showing this reasoning",
-                "translation": "English translation of the reasoning text"
-            }},
-            {{
-                "name": "Maliki",
-                "reasoning": "The underlying wisdom according to Maliki school",
-                "arabic_text": "Original Arabic/Urdu text showing this reasoning",
-                "translation": "English translation of the reasoning text"
-            }},
-            {{
-                "name": "Shafi",
-                "reasoning": "The underlying wisdom according to Shafi school",
-                "arabic_text": "Original Arabic/Urdu text showing this reasoning",
-                "translation": "English translation of the reasoning text"
-            }},
-            {{
-                "name": "Hanbali",
-                "reasoning": "The underlying wisdom according to Hanbali school",
-                "arabic_text": "Original Arabic/Urdu text showing this reasoning",
-                "translation": "English translation of the reasoning text"
-            }}
-        ]
-    }},
-    "application": {{
-        "explanation": "Overview of practical applications",
-        "schools": [
-            {{
-                "name": "Hanafi",
-                "application": "Practical application according to Hanafi school",
-                "arabic_text": "Original Arabic/Urdu text about this application",
-                "translation": "English translation of the application text"
-            }},
-            {{
-                "name": "Maliki",
-                "application": "Practical application according to Maliki school",
-                "arabic_text": "Original Arabic/Urdu text about this application",
-                "translation": "English translation of the application text"
-            }},
-            {{
-                "name": "Shafi",
-                "application": "Practical application according to Shafi school",
-                "arabic_text": "Original Arabic/Urdu text about this application",
-                "translation": "English translation of the application text"
-            }},
-            {{
-                "name": "Hanbali",
-                "application": "Practical application according to Hanbali school",
-                "arabic_text": "Original Arabic/Urdu text about this application",
-                "translation": "English translation of the application text"
-            }}
-        ]
-    }},
-    "examples": {{
-        "explanation": "Overview of practical examples",
-        "schools": [
-            {{
-                "name": "Hanafi",
-                "example": "Examples from Hanafi school",
-                "arabic_text": "Original Arabic/Urdu text of the examples",
-                "translation": "English translation of the examples"
-            }},
-            {{
-                "name": "Maliki",
-                "example": "Examples from Maliki school",
-                "arabic_text": "Original Arabic/Urdu text of the examples",
-                "translation": "English translation of the examples"
-            }},
-            {{
-                "name": "Shafi",
-                "example": "Examples from Shafi school",
-                "arabic_text": "Original Arabic/Urdu text of the examples",
-                "translation": "English translation of the examples"
-            }},
-            {{
-                "name": "Hanbali",
-                "example": "Examples from Hanbali school",
-                "arabic_text": "Original Arabic/Urdu text of the examples",
-                "translation": "English translation of the examples"
-            }}
-        ]
-    }}
-}}"""
-
-    try:
-        response = palm.Client(api_key=GEMINI_API_KEY_2).models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-        response_text = response.text
-        if '```json' in response_text:
-            json_str = response_text.split('```json')[1].split('```')[0].strip()
-        elif '```' in response_text:
-            json_str = response_text.split('```')[1].strip()
-        else:
-            json_str = response_text.strip()
             
-        return json.loads(json_str)
+            # Create table with correct schema
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS template_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    template_name TEXT,
+                    description TEXT,
+                    coin_symbol TEXT,
+                    historical_period INTEGER,
+                    analysis_date TEXT,
+                    gemini_model TEXT,
+                    requirements TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Insert new draft
+            c.execute('''
+                INSERT INTO template_drafts 
+                (template_name, description, coin_symbol, historical_period, 
+                 analysis_date, gemini_model, requirements)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data.get('template_name'),
+                data.get('description'),
+                data.get('coin_symbol'),
+                data.get('historical_period'),
+                data.get('analysis_date'),
+                data.get('gemini_model'),
+                json.dumps(data.get('requirements', []))
+            ))
+            
+            draft_id = c.lastrowid
+            
+            return jsonify({
+                "status": "success",
+                "message": "Draft saved successfully",
+                "data": {
+                    "draft_id": draft_id
+                }
+            })
+            
     except Exception as e:
-        return {"error": "Analysis failed", "message": str(e)}
-
-@app.route('/api/search/first', methods=['POST'])
-def handle_first_three():
-    """Handle definition, ruling, and evidence"""
-    if not request.is_json:
-        return jsonify({"error": "Content-Type must be application/json"}), 400
-    
-    data = request.get_json()
-    if 'query' not in data:
-        return jsonify({"error": "Query parameter is required"}), 400
-    
-    results, cleaned_query = get_similar_texts(data['query'])
-    if results is None:
-        return jsonify({"error": "Search failed", "message": cleaned_query}), 500
-    
-    analysis = analyze_first_three(results)
-    
-    response = {
-        "query": {
-            "original": data['query'],
-            "cleaned": cleaned_query
-        },
-        "similar_texts": [
-            {
-                "page": result['page'],
-                "similarity": f"{result['similarity']:.2%}",
-                "arabic": result['arabic'],
-                "english": result['english']
-            }
-            for result in results
-        ],
-        "analysis": analysis
-    }
-    
-    return jsonify(response)
-
-@app.route('/api/search/last', methods=['POST'])
-def handle_last_three():
-    """Handle reasoning, application, and examples"""
-    if not request.is_json:
-        return jsonify({"error": "Content-Type must be application/json"}), 400
-    
-    data = request.get_json()
-    if 'query' not in data:
-        return jsonify({"error": "Query parameter is required"}), 400
-    
-    results, cleaned_query = get_similar_texts(data['query'])
-    if results is None:
-        return jsonify({"error": "Search failed", "message": cleaned_query}), 500
-    
-    analysis = analyze_last_three(results)
-    
-    response = {
-        "query": {
-            "original": data['query'],
-            "cleaned": cleaned_query
-        },
-        "similar_texts": [
-            {
-                "page": result['page'],
-                "similarity": f"{result['similarity']:.2%}",
-                "arabic": result['arabic'],
-                "english": result['english']
-            }
-            for result in results
-        ],
-        "analysis": analysis
-    }
-    
-    return jsonify(response)
-
-@app.route('/api/query/general', methods=['POST'])
-def handle_general_query():
-    """Handle initial query by returning both query and extracted keywords"""
-    if not request.is_json:
-        return jsonify({"error": "Content-Type must be application/json"}), 400
-    
-    data = request.get_json()
-    if 'query' not in data:
-        return jsonify({"error": "Query parameter is required"}), 400
-
-    try:
-        palm.configure(api_key=GENERAL_API_KEY)
-        
-        answer_prompt = f"""As an Islamic scholar, what you get is a formulated question. Just directly answer the question in general. Make sure at least there's some detailness".
-
-This is the question user clicked that he wants to know about: {data['query']}
-
-Return only the answer not another question, don't start the question with yes or no. Directly answer the question. Nothing else."""
-
-        answer_response = generate_content(answer_prompt, GENERAL_API_KEY)
-
-        keyword_prompt = f"""From this Islamic question: "{data['query']}"
-Extract only the most important keywords related to Islamic terms, concepts, or practices. 
-Return just 2-4 keywords separated by spaces, nothing else. For example: "wudu prayer fasting" """
-
-        keyword_response = generate_content(keyword_prompt, GENERAL_API_KEY)
-        
+        print(f"Error saving draft: {str(e)}")
         return jsonify({
-            "query": answer_response,
-            "keyword": keyword_response
-        })
+            "status": "error",
+            "message": str(e)
+        }), 500
 
+@app.route('/draft', methods=['GET'])
+def get_drafts():
+    """Get all template editor drafts"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    template_name,
+                    description,
+                    coin_symbol,
+                    historical_period,
+                    analysis_date,
+                    gemini_model,
+                    requirements,
+                    datetime(created_at) as created_at,
+                    datetime(updated_at) as updated_at
+                FROM template_drafts 
+                ORDER BY updated_at DESC
+            ''')
+            
+            drafts = []
+            for row in c.fetchall():
+                draft = dict(row)
+                draft['requirements'] = json.loads(draft['requirements'])
+                drafts.append(draft)
+            
+            return jsonify({
+                "status": "success",
+                "data": drafts
+            })
+            
     except Exception as e:
-        error_msg = f"Failed to generate response: {str(e)}"
-        return jsonify({"error": error_msg}), 500
+        print(f"Error getting drafts: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
+@app.route('/draft/<int:draft_id>', methods=['GET'])
+def get_draft(draft_id):
+    """Get specific draft by ID"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    template_name,
+                    description,
+                    coin_symbol,
+                    historical_period,
+                    analysis_date,
+                    gemini_model,
+                    requirements,
+                    datetime(created_at) as created_at,
+                    datetime(updated_at) as updated_at
+                FROM template_drafts 
+                WHERE id = ?
+            ''', (draft_id,))
+            
+            result = c.fetchone()
+            
+            if result:
+                draft = dict(result)
+                draft['requirements'] = json.loads(draft['requirements'])
+                return jsonify({
+                    "status": "success",
+                    "data": draft
+                })
+            
+            return jsonify({
+                "status": "error",
+                "message": "Draft not found"
+            }), 404
+            
+    except Exception as e:
+        print(f"Error getting draft: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
+@app.route('/draft/<int:draft_id>', methods=['DELETE'])
+def delete_draft(draft_id):
+    """Delete a specific draft by ID"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Delete the draft
+            c.execute('DELETE FROM template_drafts WHERE id = ?', (draft_id,))
+            
+            if c.rowcount == 0:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Draft with ID {draft_id} not found"
+                }), 404
+            
+            conn.commit()
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Draft {draft_id} deleted successfully"
+            })
+            
+    except Exception as e:
+        print(f"Error deleting draft: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/draft/run', methods=['POST'])
+def run_draft():
+    """Run analysis based on provided template data"""
+    try:
+        data = request.get_json()
+        
+        # Get historical data for the selected coin
+        try:
+            current_date = datetime.strptime(data['analysis_date'], '%B %dth, %Y')
+            past_date = current_date - timedelta(days=data['historical_period'])
+            
+            print(f"\nFetching historical data from {past_date.strftime('%Y-%m-%d')} to {current_date.strftime('%Y-%m-%d')}")
+            
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                c.execute('''
+                    SELECT analysis_date, summary
+                    FROM reason_summaries
+                    WHERE analysis_date BETWEEN ? AND ?
+                    AND LOWER(coin_name) = LOWER(?)
+                    ORDER BY analysis_date DESC
+                ''', (past_date.strftime('%Y-%m-%d'), 
+                      current_date.strftime('%Y-%m-%d'), 
+                      data['coin_symbol']))
+                
+                historical_rows = c.fetchall()
+                print(f"Found {len(historical_rows)} historical summaries")
+                
+                historical_data = []
+                for row in historical_rows:
+                    try:
+                        summary_json = json.loads(row['summary'])
+                        historical_data.append({
+                            "date": row['analysis_date'],
+                            "key_points": summary_json.get('key_points', [])
+                        })
+                    except Exception as e:
+                        print(f"Error processing historical data: {str(e)}")
+                        continue
+
+        except Exception as db_error:
+            print(f"Database error: {str(db_error)}")
+            return jsonify({
+                "status": "error",
+                "message": f"Database error: {str(db_error)}"
+            }), 500
+
+        # Get price data
+        try:
+            price_data = price_service.get_historical_prices(data['coin_symbol'].lower())
+            
+            formatted_price_data = {
+                "symbol": price_data["symbol"],
+                "prices": [
+                    {
+                        "date": price.date,
+                        "price": price.price
+                    } for price in price_data["prices"]
+                ]
+            }
+            
+            current_price = price_data['prices'][-1].price if price_data['prices'] else 0
+            previous_price = price_data['prices'][-2].price if len(price_data['prices']) > 1 else current_price
+            price_change = ((current_price - previous_price) / previous_price) * 100
+        except Exception as e:
+            print(f"Error getting price data: {str(e)}")
+            current_price = 0
+            price_change = 0
+            formatted_price_data = {"symbol": data['coin_symbol'], "prices": []}
+
+        # Configure Gemini
+        api_key = os.getenv('GEMINI_API_KEY_1')
+        if not api_key:
+            return jsonify({
+                "status": "error",
+                "message": "GEMINI_API_KEY_1 not found in environment variables"
+            }), 500
+            
+        print("\nConfiguring Gemini model...")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name=data['gemini_model'])
+        
+        # Build requirements section from requirements
+        requirements_text = "\n".join([f"{i+1}. {req}" for i, req in enumerate(data['requirements'])])
+        
+        prompt = f"""Analyze {data['coin_symbol']} market conditions and provide a detailed report matching the exact format below.
+
+ANALYSIS REQUIREMENTS:
+
+{requirements_text}
+
+Current Market Data:
+Price: ${current_price:.2f}
+24h Change: {price_change:.1f}%
+
+REQUIRED OUTPUT FORMAT:
+{{
+  "symbol": "{data['coin_symbol']}",
+  "name": "{data['template_name']}",
+  "price": "{current_price:.2f}",
+  "priceChange": {price_change:.1f},
+  "targetPrice": "[Target Price]",
+  "sentiment": "[Bullish/Neutral/Bearish]",
+  "sentimentScore": [1-10],
+  "market": "[Single detailed paragraph combining key market insights]",
+  "prediction": {{
+    "direction": "[Clear trend statement]",
+    "reasoning": [
+      "1. [Network insight]",
+      "2. [Technical insight]",
+      "3. [Development insight]",
+      "4. [Timeline insight]"
+    ]
+  }},
+  "timeline": "[3-month window]",
+  "confidence": [percentage],
+  "status": "Complete"
+}}
+
+CRITICAL REQUIREMENTS:
+1. All analysis must be data-driven with specific numbers
+2. Market analysis must be one detailed paragraph
+3. Prediction points must be specific and quantifiable
+4. Maintain exact UI format
+5. Target price must have technical and fundamental basis
+6. Timeline must consider known upcoming events
+7. Confidence score must reflect data reliability
+8. All monetary values in USD
+
+Historical Analysis Data:
+{json.dumps(historical_data, indent=2)}
+
+Price Data:
+{json.dumps(formatted_price_data, indent=2)}
+"""
+
+        try:
+            print("\nSending to Gemini for analysis...")
+            response = model.generate_content(prompt)
+            
+            print("\nRAW GEMINI RESPONSE:")
+            print(response.text)
+            
+            # Clean and parse response
+            clean_response = response.text.strip()
+            json_start = clean_response.find('{')
+            json_end = clean_response.rfind('}') + 1
+            json_content = clean_response[json_start:json_end].strip()
+            
+            # Remove any markdown code block markers
+            json_content = json_content.replace('```json', '').replace('```', '')
+            
+            print("\nExtracted JSON content:")
+            print(json_content)
+            
+            analysis = json.loads(json_content)
+            
+            return jsonify({
+                "status": "success",
+                "data": analysis
+            })
+            
+        except Exception as e:
+            print(f"\nError generating analysis: {str(e)}")
+            print("\nFull error details:")
+            traceback.print_exc()
+            return jsonify({
+                "status": "error",
+                "message": str(e)
+            }), 500
+            
+    except Exception as e:
+        print(f"\nError in run_draft: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/template', methods=['POST'])
+def save_template():
+    """Save analysis template"""
+    try:
+        data = request.get_json()
+        
+        # Create templates table if it doesn't exist
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Drop existing table to reset schema
+            
+            # Create table with same structure as drafts
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS analysis_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    template_name TEXT,
+                    description TEXT,
+                    coin_symbol TEXT,
+                    historical_period INTEGER,
+                    analysis_date TEXT,
+                    gemini_model TEXT,
+                    requirements TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Insert new template
+            c.execute('''
+                INSERT INTO analysis_templates 
+                (template_name, description, coin_symbol, historical_period, 
+                 analysis_date, gemini_model, requirements)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data.get('template_name'),
+                data.get('description'),
+                data.get('coin_symbol'),
+                data.get('historical_period'),
+                data.get('analysis_date'),
+                data.get('gemini_model'),
+                json.dumps(data.get('requirements', []))
+            ))
+            
+            template_id = c.lastrowid
+            
+            return jsonify({
+                "status": "success",
+                "message": "Template saved successfully",
+                "data": {
+                    "template_id": template_id
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error saving template: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/template', methods=['GET'])
+def get_templates():
+    """Get all analysis templates"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    template_name,
+                    description,
+                    coin_symbol,
+                    historical_period,
+                    analysis_date,
+                    gemini_model,
+                    requirements,
+                    datetime(created_at) as created_at,
+                    datetime(updated_at) as updated_at
+                FROM analysis_templates 
+                ORDER BY updated_at DESC
+            ''')
+            
+            templates = []
+            for row in c.fetchall():
+                template = dict(row)
+                template['requirements'] = json.loads(template['requirements'])
+                templates.append(template)
+            
+            return jsonify({
+                "status": "success",
+                "data": templates
+            })
+            
+    except Exception as e:
+        print(f"Error getting templates: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/template/<int:template_id>', methods=['DELETE'])
+def delete_template(template_id):
+    """Delete a specific template by ID"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            c.execute('DELETE FROM analysis_templates WHERE id = ?', (template_id,))
+            
+            if c.rowcount == 0:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Template with ID {template_id} not found"
+                }), 404
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Template {template_id} deleted successfully"
+            })
+            
+    except Exception as e:
+        print(f"Error deleting template: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
 if __name__ == '__main__':
     init_db()
     app.run(port=8080, host='0.0.0.0')
