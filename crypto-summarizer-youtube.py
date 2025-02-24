@@ -6672,18 +6672,28 @@ def delete_draft(draft_id):
 def run_draft():
     """Run analysis based on provided template data"""
     try:
+        print("\n🚀 Starting draft/run analysis...")
+        
         data = request.get_json()
+        print(f"📥 Received request data: {json.dumps(data, indent=2)}")
         
         # Get historical data for the selected coin
         try:
+            print(f"\n🔍 Parsing analysis date: {data.get('analysis_date')}")
             current_date = datetime.strptime(data['analysis_date'], '%B %dth, %Y')
             past_date = current_date - timedelta(days=data['historical_period'])
             
-            print(f"\nFetching historical data from {past_date.strftime('%Y-%m-%d')} to {current_date.strftime('%Y-%m-%d')}")
+            print(f"📅 Analysis period:")
+            print(f"  - From: {past_date.strftime('%Y-%m-%d')}")
+            print(f"  - To: {current_date.strftime('%Y-%m-%d')}")
+            print(f"  - Duration: {data['historical_period']} days")
             
             with sqlite3.connect(DB_PATH) as conn:
+                print("\n🗃️ Connected to database")
                 conn.row_factory = sqlite3.Row
                 c = conn.cursor()
+                
+                print(f"🔎 Querying historical data for {data['coin_symbol']}")
                 c.execute('''
                     SELECT analysis_date, summary
                     FROM reason_summaries
@@ -6695,22 +6705,13 @@ def run_draft():
                       data['coin_symbol']))
                 
                 historical_rows = c.fetchall()
-                print(f"Found {len(historical_rows)} historical summaries")
-                
-                historical_data = []
-                for row in historical_rows:
-                    try:
-                        summary_json = json.loads(row['summary'])
-                        historical_data.append({
-                            "date": row['analysis_date'],
-                            "key_points": summary_json.get('key_points', [])
-                        })
-                    except Exception as e:
-                        print(f"Error processing historical data: {str(e)}")
-                        continue
+                print(f"✨ Found {len(historical_rows)} historical summaries")
 
         except Exception as db_error:
-            print(f"Database error: {str(db_error)}")
+            print(f"\n❌ Database error:")
+            print(f"Error type: {type(db_error).__name__}")
+            print(f"Error details: {str(db_error)}")
+            traceback.print_exc()
             return jsonify({
                 "status": "error",
                 "message": f"Database error: {str(db_error)}"
@@ -6718,98 +6719,50 @@ def run_draft():
 
         # Get price data
         try:
+            print(f"\n💰 Fetching price data for {data['coin_symbol']}")
             price_data = price_service.get_historical_prices(data['coin_symbol'].lower())
+            print(f"📊 Got {len(price_data['prices'])} price points")
             
-            formatted_price_data = {
-                "symbol": price_data["symbol"],
-                "prices": [
-                    {
-                        "date": price.date,
-                        "price": price.price
-                    } for price in price_data["prices"]
-                ]
-            }
-            
-            current_price = price_data['prices'][-1].price if price_data['prices'] else 0
-            previous_price = price_data['prices'][-2].price if len(price_data['prices']) > 1 else current_price
-            price_change = ((current_price - previous_price) / previous_price) * 100
-        except Exception as e:
-            print(f"Error getting price data: {str(e)}")
-            current_price = 0
-            price_change = 0
-            formatted_price_data = {"symbol": data['coin_symbol'], "prices": []}
-
-        # Configure Gemini
-        api_key = os.getenv('GEMINI_API_KEY_1')
-        if not api_key:
+        except Exception as price_error:
+            print(f"\n❌ Price data error:")
+            print(f"Error type: {type(price_error).__name__}")
+            print(f"Error details: {str(price_error)}")
+            traceback.print_exc()
             return jsonify({
                 "status": "error",
-                "message": "GEMINI_API_KEY_1 not found in environment variables"
+                "message": f"Price data error: {str(price_error)}"
             }), 500
+
+        # Configure Gemini
+        try:
+            print("\n🤖 Configuring Gemini model...")
+            api_key = os.getenv('GEMINI_API_KEY_1')
+            if not api_key:
+                print("❌ GEMINI_API_KEY_1 not found in environment variables")
+                return jsonify({
+                    "status": "error",
+                    "message": "GEMINI_API_KEY_1 not found"
+                }), 500
+                
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name=data['gemini_model'])
+            print(f"✅ Configured model: {data['gemini_model']}")
             
-        print("\nConfiguring Gemini model...")
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name=data['gemini_model'])
-        
-        # Build requirements section from requirements
-        requirements_text = "\n".join([f"{i+1}. {req}" for i, req in enumerate(data['requirements'])])
-        
-        prompt = f"""Analyze {data['coin_symbol']} market conditions and provide a detailed report matching the exact format below.
-
-ANALYSIS REQUIREMENTS:
-
-{requirements_text}
-
-Current Market Data:
-Price: ${current_price:.2f}
-24h Change: {price_change:.1f}%
-
-REQUIRED OUTPUT FORMAT:
-{{
-  "symbol": "{data['coin_symbol']}",
-  "name": "{data['template_name']}",
-  "price": "{current_price:.2f}",
-  "priceChange": {price_change:.1f},
-  "targetPrice": "[Target Price]",
-  "sentiment": "[Bullish/Neutral/Bearish]",
-  "sentimentScore": [1-10],
-  "market": "[Single detailed paragraph combining key market insights]",
-  "prediction": {{
-    "direction": "[Clear trend statement]",
-    "reasoning": [
-      "1. [Network insight]",
-      "2. [Technical insight]",
-      "3. [Development insight]",
-      "4. [Timeline insight]"
-    ]
-  }},
-  "timeline": "[3-month window]",
-  "confidence": [percentage],
-  "status": "Complete"
-}}
-
-CRITICAL REQUIREMENTS:
-1. All analysis must be data-driven with specific numbers
-2. Market analysis must be one detailed paragraph
-3. Prediction points must be specific and quantifiable
-4. Maintain exact UI format
-5. Target price must have technical and fundamental basis
-6. Timeline must consider known upcoming events
-7. Confidence score must reflect data reliability
-8. All monetary values in USD
-
-Historical Analysis Data:
-{json.dumps(historical_data, indent=2)}
-
-Price Data:
-{json.dumps(formatted_price_data, indent=2)}
-"""
+        except Exception as gemini_error:
+            print(f"\n❌ Gemini configuration error:")
+            print(f"Error type: {type(gemini_error).__name__}")
+            print(f"Error details: {str(gemini_error)}")
+            traceback.print_exc()
+            return jsonify({
+                "status": "error",
+                "message": f"Gemini configuration error: {str(gemini_error)}"
+            }), 500
 
         try:
-            print("\nSending to Gemini for analysis...")
+            print("\n📝 Generating analysis...")
             response = model.generate_content(prompt)
             
-            print("\nRAW GEMINI RESPONSE:")
+            print("\n📄 Raw Gemini response:")
             print(response.text)
             
             # Clean and parse response
@@ -6818,31 +6771,31 @@ Price Data:
             json_end = clean_response.rfind('}') + 1
             json_content = clean_response[json_start:json_end].strip()
             
-            # Remove any markdown code block markers
-            json_content = json_content.replace('```json', '').replace('```', '')
-            
-            print("\nExtracted JSON content:")
+            print("\n🔍 Extracted JSON content:")
             print(json_content)
             
             analysis = json.loads(json_content)
+            print("\n✅ Successfully parsed analysis")
             
             return jsonify({
                 "status": "success",
                 "data": analysis
             })
             
-        except Exception as e:
-            print(f"\nError generating analysis: {str(e)}")
-            print("\nFull error details:")
+        except Exception as analysis_error:
+            print(f"\n❌ Analysis generation error:")
+            print(f"Error type: {type(analysis_error).__name__}")
+            print(f"Error details: {str(analysis_error)}")
             traceback.print_exc()
             return jsonify({
                 "status": "error",
-                "message": str(e)
+                "message": f"Analysis generation error: {str(analysis_error)}"
             }), 500
             
     except Exception as e:
-        print(f"\nError in run_draft: {str(e)}")
-        print("\nFull error details:")
+        print(f"\n❌ Unexpected error in run_draft:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error details: {str(e)}")
         traceback.print_exc()
         return jsonify({
             "status": "error",
