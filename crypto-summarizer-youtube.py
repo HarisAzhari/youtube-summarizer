@@ -6706,6 +6706,19 @@ def run_draft():
                 
                 historical_rows = c.fetchall()
                 print(f"✨ Found {len(historical_rows)} historical summaries")
+                
+                # Format historical data
+                historical_data = []
+                for row in historical_rows:
+                    try:
+                        summary_json = json.loads(row['summary'])
+                        historical_data.append({
+                            "date": row['analysis_date'],
+                            "key_points": summary_json.get('key_points', [])
+                        })
+                    except Exception as e:
+                        print(f"Error processing historical data: {str(e)}")
+                        continue
 
         except Exception as db_error:
             print(f"\n❌ Database error:")
@@ -6721,6 +6734,21 @@ def run_draft():
         try:
             print(f"\n💰 Fetching price data for {data['coin_symbol']}")
             price_data = price_service.get_historical_prices(data['coin_symbol'].lower())
+            
+            formatted_price_data = {
+                "symbol": price_data["symbol"],
+                "prices": [
+                    {
+                        "date": price.date,
+                        "price": price.price
+                    } for price in price_data["prices"]
+                ]
+            }
+            
+            current_price = price_data['prices'][-1].price if price_data['prices'] else 0
+            previous_price = price_data['prices'][-2].price if len(price_data['prices']) > 1 else current_price
+            price_change = ((current_price - previous_price) / previous_price) * 100
+            
             print(f"📊 Got {len(price_data['prices'])} price points")
             
         except Exception as price_error:
@@ -6751,8 +6779,76 @@ def run_draft():
                 "message": f"Gemini configuration error: {str(gemini_error)}"
             }), 500
 
+        # Build the prompt
         try:
-            print("\n📝 Generating analysis...")
+            print("\n📝 Building analysis prompt...")
+            requirements_text = "\n".join([f"{i+1}. {req}" for i, req in enumerate(data['requirements'])])
+            
+            prompt = f"""Analyze {data['coin_symbol']} market conditions and provide a detailed report matching the exact format below.
+
+ANALYSIS REQUIREMENTS:
+
+{requirements_text}
+
+Current Market Data:
+Price: ${current_price:.2f}
+24h Change: {price_change:.1f}%
+
+REQUIRED OUTPUT FORMAT:
+{{
+  "symbol": "{data['coin_symbol']}",
+  "name": "{data['template_name']}",
+  "price": "{current_price:.2f}",
+  "priceChange": {price_change:.1f},
+  "targetPrice": "[Target Price]",
+  "sentiment": "[Bullish/Neutral/Bearish]",
+  "sentimentScore": [1-10],
+  "market": "[Single detailed paragraph combining key market insights]",
+  "prediction": {{
+    "direction": "[Clear trend statement]",
+    "reasoning": [
+      "1. [Network insight]",
+      "2. [Technical insight]",
+      "3. [Development insight]",
+      "4. [Timeline insight]"
+    ]
+  }},
+  "timeline": "[3-month window]",
+  "confidence": [percentage],
+  "status": "Complete"
+}}
+
+CRITICAL REQUIREMENTS:
+1. All analysis must be data-driven with specific numbers
+2. Market analysis must be one detailed paragraph
+3. Prediction points must be specific and quantifiable
+4. Maintain exact UI format
+5. Target price must have technical and fundamental basis
+6. Timeline must consider known upcoming events
+7. Confidence score must reflect data reliability
+8. All monetary values in USD
+
+Historical Analysis Data:
+{json.dumps(historical_data, indent=2)}
+
+Price Data:
+{json.dumps(formatted_price_data, indent=2)}
+"""
+            print("✅ Prompt built successfully")
+
+        except Exception as prompt_error:
+            print(f"\n❌ Prompt building error:")
+            print(f"Error type: {type(prompt_error).__name__}")
+            print(f"Error details: {str(prompt_error)}")
+            traceback.print_exc()
+            return jsonify({
+                "status": "error",
+                "message": f"Prompt building error: {str(prompt_error)}"
+            }), 500
+
+        # Generate analysis
+        try:
+            print("\n🤖 Sending to Gemini for analysis...")
             response = model.generate_content(prompt)
             
             print("\n📄 Raw Gemini response:")
