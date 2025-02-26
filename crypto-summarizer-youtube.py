@@ -173,7 +173,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=55, second=0, microsecond=0)
+    next_run = now.replace(hour=8, minute=59, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -4068,9 +4068,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-02-22",
-            "2025-02-23",
-            "2025-02-24",
+            "2025-02-25",
+            "2025-02-26",
         ]
         
         # Configure Gemini
@@ -5716,7 +5715,7 @@ def respond():
         2. Are you asking about which types of wealth are subject to Zakat?
         3. Are you asking about when Zakat becomes obligatory?
 
-        Provide 6 clarifying questions
+        Provide 12 clarifying questions
 
         Provide respond according to the language of the user if its english or urdu or arabic or malay. The question is not only about zakat but also about other fiqh topics.
 
