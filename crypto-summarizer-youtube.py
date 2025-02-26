@@ -5700,7 +5700,7 @@ def respond():
         # Structured prompt for Fiqh questions
         system_prompt = """
         You are a Fiqh guidance system. When users ask about Zakat or other Fiqh topics:
-        1. Instead of giving direct answers, provide 3-4 clarifying questions
+        1. Instead of giving direct answers, provide 12 clarifying questions
         2. Focus on understanding which specific aspect they need help with
         3. Questions should cover different aspects like:
            - Practical implementation
