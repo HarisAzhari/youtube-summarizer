@@ -7520,6 +7520,119 @@ def get_daily_market_analysis(date):
             "status": "error",
             "message": str(e)
         }), 500
+    
+
+@app.route('/api/v1/coin-trends/<date>')
+def get_coin_trends_by_date(date):
+    """Get simplified coin sentiment counts for a specific date (Malaysia timezone)"""
+    try:
+        # Validate date format
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid date format. Please use YYYY-MM-DD"
+            }), 400
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # First get all coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Query with explicit timezone conversion in SQL
+            c.execute('''
+                WITH video_times AS (
+                    SELECT 
+                        v.video_id,
+                        v.channel_name,
+                        v.published_at,
+                        datetime(v.published_at, '+8 hours') as my_time,
+                        ca.coin_mentioned,
+                        ca.indicator
+                    FROM videos v
+                    JOIN coin_analysis ca ON v.video_id = ca.video_id
+                )
+                SELECT *
+                FROM video_times
+                WHERE date(my_time) = ?
+            ''', (date,))
+            
+            mentions = [dict(row) for row in c.fetchall()]
+            
+            if not mentions:
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "date": date,
+                        "coins": []
+                    }
+                })
+
+            # Process mentions with name overrides
+            coin_stats = {}
+            for mention in mentions:
+                # Apply name override if exists
+                coin_name = mention['coin_mentioned']
+                if coin_name in name_mapping:
+                    coin_name = name_mapping[coin_name]
+                
+                if coin_name not in coin_stats:
+                    coin_stats[coin_name] = {
+                        "coin": coin_name,
+                        "sentiment": {
+                            "bullish": 0,
+                            "bearish": 0,
+                            "neutral": 0
+                        }
+                    }
+                
+                # Track sentiment counts
+                indicator = mention["indicator"].lower()
+                if "bullish" in indicator:
+                    coin_stats[coin_name]["sentiment"]["bullish"] += 1
+                elif "bearish" in indicator:
+                    coin_stats[coin_name]["sentiment"]["bearish"] += 1
+                else:
+                    coin_stats[coin_name]["sentiment"]["neutral"] += 1
+
+            # Convert to list and sort by total mentions
+            coins_list = list(coin_stats.values())
+            
+            # Sort by total mentions (sum of all sentiment counts)
+            coins_list.sort(
+                key=lambda x: (
+                    x["sentiment"]["bullish"] + 
+                    x["sentiment"]["bearish"] + 
+                    x["sentiment"]["neutral"]
+                ), 
+                reverse=True
+            )
+
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": date,
+                    "coins": coins_list
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_coin_trends_by_date: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 
 
 
