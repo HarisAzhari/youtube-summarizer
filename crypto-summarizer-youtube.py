@@ -173,7 +173,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=8, minute=59, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=51, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -4068,8 +4068,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-02-25",
             "2025-02-26",
+            "2025-02-27",
         ]
         
         # Configure Gemini
@@ -7019,6 +7019,513 @@ def delete_template(template_id):
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/analysis-result', methods=['POST'])
+def save_analysis_result():
+    """Save analysis result"""
+    try:
+        data = request.get_json()
+        
+        # Create analysis_results table if it doesn't exist
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Create table if not exists
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS analysis_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT,
+                    name TEXT,
+                    price TEXT,
+                    price_change REAL,
+                    target_price TEXT,
+                    sentiment TEXT,
+                    sentiment_score INTEGER,
+                    market TEXT,
+                    prediction_direction TEXT,
+                    prediction_reasoning TEXT,
+                    timeline TEXT,
+                    confidence INTEGER,
+                    status TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Insert new analysis result
+            c.execute('''
+                INSERT INTO analysis_results 
+                (symbol, name, price, price_change, target_price, sentiment, 
+                 sentiment_score, market, prediction_direction, prediction_reasoning, 
+                 timeline, confidence, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data.get('symbol'),
+                data.get('name'),
+                data.get('price'),
+                data.get('priceChange'),
+                data.get('targetPrice'),
+                data.get('sentiment'),
+                data.get('sentimentScore'),
+                data.get('market'),
+                data.get('prediction', {}).get('direction'),
+                json.dumps(data.get('prediction', {}).get('reasoning', [])),
+                data.get('timeline'),
+                data.get('confidence'),
+                data.get('status')
+            ))
+            
+            result_id = c.lastrowid
+            
+            print(f"✅ Saved analysis result with ID: {result_id}")
+            
+            return jsonify({
+                "status": "success",
+                "message": "Analysis result saved successfully",
+                "data": {
+                    "result_id": result_id
+                }
+            })
+            
+    except Exception as e:
+        print(f"❌ Error saving analysis result: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/analysis-result', methods=['GET'])
+def get_analysis_results():
+    """Get all analysis results"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    symbol,
+                    name,
+                    price,
+                    price_change,
+                    target_price,
+                    sentiment,
+                    sentiment_score,
+                    market,
+                    prediction_direction,
+                    prediction_reasoning,
+                    timeline,
+                    confidence,
+                    status,
+                    datetime(created_at) as created_at
+                FROM analysis_results 
+                ORDER BY created_at DESC
+            ''')
+            
+            results = []
+            for row in c.fetchall():
+                result = dict(row)
+                
+                # Format the result to match the expected structure
+                formatted_result = {
+                    "id": result['id'],
+                    "symbol": result['symbol'],
+                    "name": result['name'],
+                    "price": result['price'],
+                    "priceChange": result['price_change'],
+                    "targetPrice": result['target_price'],
+                    "sentiment": result['sentiment'],
+                    "sentimentScore": result['sentiment_score'],
+                    "market": result['market'],
+                    "prediction": {
+                        "direction": result['prediction_direction'],
+                        "reasoning": json.loads(result['prediction_reasoning'])
+                    },
+                    "timeline": result['timeline'],
+                    "confidence": result['confidence'],
+                    "status": result['status'],
+                    "timestamp": result['created_at']
+                }
+                
+                results.append(formatted_result)
+            
+            return jsonify({
+                "status": "success",
+                "data": results
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting analysis results: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/analysis-result/<int:result_id>', methods=['DELETE'])
+def delete_analysis_result(result_id):
+    """Delete a specific analysis result by ID"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            c.execute('DELETE FROM analysis_results WHERE id = ?', (result_id,))
+            
+            if c.rowcount == 0:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Analysis result with ID {result_id} not found"
+                }), 404
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Analysis result {result_id} deleted successfully"
+            })
+            
+    except Exception as e:
+        print(f"❌ Error deleting analysis result: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/publish', methods=['POST'])
+def publish_analysis():
+    """Publish analysis result"""
+    try:
+        data = request.get_json()
+        
+        # Create published_analyses table if it doesn't exist
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Create table if not exists
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS published_analyses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT,
+                    name TEXT,
+                    price TEXT,
+                    price_change REAL,
+                    target_price TEXT,
+                    sentiment TEXT,
+                    sentiment_score INTEGER,
+                    market TEXT,
+                    prediction_direction TEXT,
+                    prediction_reasoning TEXT,
+                    timeline TEXT,
+                    confidence INTEGER,
+                    status TEXT,
+                    published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Insert new published analysis
+            c.execute('''
+                INSERT INTO published_analyses 
+                (symbol, name, price, price_change, target_price, sentiment, 
+                 sentiment_score, market, prediction_direction, prediction_reasoning, 
+                 timeline, confidence, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data.get('symbol'),
+                data.get('name'),
+                data.get('price'),
+                data.get('priceChange'),
+                data.get('targetPrice'),
+                data.get('sentiment'),
+                data.get('sentimentScore'),
+                data.get('market'),
+                data.get('prediction', {}).get('direction'),
+                json.dumps(data.get('prediction', {}).get('reasoning', [])),
+                data.get('timeline'),
+                data.get('confidence'),
+                data.get('status')
+            ))
+            
+            publish_id = c.lastrowid
+            
+            print(f"✅ Published analysis with ID: {publish_id}")
+            
+            return jsonify({
+                "status": "success",
+                "message": "Analysis published successfully",
+                "data": {
+                    "publish_id": publish_id
+                }
+            })
+            
+    except Exception as e:
+        print(f"❌ Error publishing analysis: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/publish', methods=['GET'])
+def get_published_analyses():
+    """Get all published analyses"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    symbol,
+                    name,
+                    price,
+                    price_change,
+                    target_price,
+                    sentiment,
+                    sentiment_score,
+                    market,
+                    prediction_direction,
+                    prediction_reasoning,
+                    timeline,
+                    confidence,
+                    status,
+                    datetime(published_at) as published_at
+                FROM published_analyses 
+                ORDER BY published_at DESC
+            ''')
+            
+            results = []
+            for row in c.fetchall():
+                result = dict(row)
+                
+                # Format the result to match the expected structure
+                formatted_result = {
+                    "id": result['id'],
+                    "symbol": result['symbol'],
+                    "name": result['name'],
+                    "price": result['price'],
+                    "priceChange": result['price_change'],
+                    "targetPrice": result['target_price'],
+                    "sentiment": result['sentiment'],
+                    "sentimentScore": result['sentiment_score'],
+                    "market": result['market'],
+                    "prediction": {
+                        "direction": result['prediction_direction'],
+                        "reasoning": json.loads(result['prediction_reasoning'])
+                    },
+                    "timeline": result['timeline'],
+                    "confidence": result['confidence'],
+                    "status": result['status'],
+                    "timestamp": result['published_at']
+                }
+                
+                results.append(formatted_result)
+            
+            return jsonify({
+                "status": "success",
+                "data": results
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting published analyses: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/publish/<int:publish_id>', methods=['GET'])
+def get_published_analysis(publish_id):
+    """Get a specific published analysis by ID"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    symbol,
+                    name,
+                    price,
+                    price_change,
+                    target_price,
+                    sentiment,
+                    sentiment_score,
+                    market,
+                    prediction_direction,
+                    prediction_reasoning,
+                    timeline,
+                    confidence,
+                    status,
+                    datetime(published_at) as published_at
+                FROM published_analyses 
+                WHERE id = ?
+            ''', (publish_id,))
+            
+            row = c.fetchone()
+            
+            if not row:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Published analysis with ID {publish_id} not found"
+                }), 404
+            
+            result = dict(row)
+            
+            # Format the result to match the expected structure
+            formatted_result = {
+                "id": result['id'],
+                "symbol": result['symbol'],
+                "name": result['name'],
+                "price": result['price'],
+                "priceChange": result['price_change'],
+                "targetPrice": result['target_price'],
+                "sentiment": result['sentiment'],
+                "sentimentScore": result['sentiment_score'],
+                "market": result['market'],
+                "prediction": {
+                    "direction": result['prediction_direction'],
+                    "reasoning": json.loads(result['prediction_reasoning'])
+                },
+                "timeline": result['timeline'],
+                "confidence": result['confidence'],
+                "status": result['status'],
+                "timestamp": result['published_at']
+            }
+            
+            return jsonify({
+                "status": "success",
+                "data": formatted_result
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting published analysis: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/v1/market-analysis/<date>')
+def get_daily_market_analysis(date):
+    try:
+        # Validate date format
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid date format. Please use YYYY-MM-DD"
+            }), 400
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # First get all coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Get Malaysia timezone (UTC+8)
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            
+            # Set the target date range in Malaysia time
+            start_my = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_my = start_my.replace(hour=23, minute=59, second=59)
+            
+            # Convert to UTC for database query
+            start_utc = malaysia_tz.localize(start_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            end_utc = malaysia_tz.localize(end_my).astimezone(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Query with UTC timestamp range
+            c.execute('''
+                WITH video_analyses AS (
+                    SELECT 
+                        v.video_id,
+                        ca.coin_mentioned,
+                        ca.reasons,
+                        ca.indicator
+                    FROM videos v
+                    LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
+                    WHERE v.published_at BETWEEN ? AND ?
+                    AND ca.coin_mentioned IS NOT NULL
+                )
+                SELECT * FROM video_analyses
+            ''', (start_utc, end_utc))
+            
+            rows = c.fetchall()
+            
+            if not rows:
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "date": date,
+                        "coins": []
+                    }
+                })
+            
+            # Group analyses by coin
+            coin_analyses = {}
+            
+            for row in rows:
+                try:
+                    parsed_reasons = json.loads(row['reasons'])
+                    
+                    # Apply name override if exists
+                    coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                    
+                    # Initialize coin entry if it doesn't exist
+                    if coin_name not in coin_analyses:
+                        coin_analyses[coin_name] = []
+                    
+                    # Add each reason with its sentiment
+                    for reason in parsed_reasons:
+                        coin_analyses[coin_name].append({
+                            "reason": reason,
+                            "sentiment": row['indicator']
+                        })
+                        
+                except Exception as e:
+                    print(f"Error parsing reasons for video {row['video_id']}: {str(e)}")
+                    continue
+            
+            # Convert dictionary to list for response
+            coins_list = []
+            for coin_name, analyses in coin_analyses.items():
+                coins_list.append({
+                    "coin": coin_name,
+                    "analyses": analyses
+                })
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "date": date,
+                    "coins": coins_list
+                }
+            })
+            
+    except Exception as e:
+        print(f"Error in get_daily_market_analysis: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+
+
+
+
     
 if __name__ == '__main__':
     init_db()
