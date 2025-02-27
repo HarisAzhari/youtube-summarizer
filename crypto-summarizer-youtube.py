@@ -7190,222 +7190,6 @@ def delete_analysis_result(result_id):
             "status": "error",
             "message": str(e)
         }), 500
-    
-@app.route('/publish', methods=['POST'])
-def publish_analysis():
-    """Publish analysis result"""
-    try:
-        data = request.get_json()
-        
-        # Create published_analyses table if it doesn't exist
-        with sqlite3.connect(DB_PATH) as conn:
-            c = conn.cursor()
-            
-            # Create table if not exists
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS published_analyses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT,
-                    name TEXT,
-                    price TEXT,
-                    price_change REAL,
-                    target_price TEXT,
-                    sentiment TEXT,
-                    sentiment_score INTEGER,
-                    market TEXT,
-                    prediction_direction TEXT,
-                    prediction_reasoning TEXT,
-                    timeline TEXT,
-                    confidence INTEGER,
-                    status TEXT,
-                    published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # Insert new published analysis
-            c.execute('''
-                INSERT INTO published_analyses 
-                (symbol, name, price, price_change, target_price, sentiment, 
-                 sentiment_score, market, prediction_direction, prediction_reasoning, 
-                 timeline, confidence, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                data.get('symbol'),
-                data.get('name'),
-                data.get('price'),
-                data.get('priceChange'),
-                data.get('targetPrice'),
-                data.get('sentiment'),
-                data.get('sentimentScore'),
-                data.get('market'),
-                data.get('prediction', {}).get('direction'),
-                json.dumps(data.get('prediction', {}).get('reasoning', [])),
-                data.get('timeline'),
-                data.get('confidence'),
-                data.get('status')
-            ))
-            
-            publish_id = c.lastrowid
-            
-            print(f"✅ Published analysis with ID: {publish_id}")
-            
-            return jsonify({
-                "status": "success",
-                "message": "Analysis published successfully",
-                "data": {
-                    "publish_id": publish_id
-                }
-            })
-            
-    except Exception as e:
-        print(f"❌ Error publishing analysis: {str(e)}")
-        traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-@app.route('/publish', methods=['GET'])
-def get_published_analyses():
-    """Get all published analyses"""
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            c = conn.cursor()
-            
-            c.execute('''
-                SELECT 
-                    id,
-                    symbol,
-                    name,
-                    price,
-                    price_change,
-                    target_price,
-                    sentiment,
-                    sentiment_score,
-                    market,
-                    prediction_direction,
-                    prediction_reasoning,
-                    timeline,
-                    confidence,
-                    status,
-                    datetime(published_at) as published_at
-                FROM published_analyses 
-                ORDER BY published_at DESC
-            ''')
-            
-            results = []
-            for row in c.fetchall():
-                result = dict(row)
-                
-                # Format the result to match the expected structure
-                formatted_result = {
-                    "id": result['id'],
-                    "symbol": result['symbol'],
-                    "name": result['name'],
-                    "price": result['price'],
-                    "priceChange": result['price_change'],
-                    "targetPrice": result['target_price'],
-                    "sentiment": result['sentiment'],
-                    "sentimentScore": result['sentiment_score'],
-                    "market": result['market'],
-                    "prediction": {
-                        "direction": result['prediction_direction'],
-                        "reasoning": json.loads(result['prediction_reasoning'])
-                    },
-                    "timeline": result['timeline'],
-                    "confidence": result['confidence'],
-                    "status": result['status'],
-                    "timestamp": result['published_at']
-                }
-                
-                results.append(formatted_result)
-            
-            return jsonify({
-                "status": "success",
-                "data": results
-            })
-            
-    except Exception as e:
-        print(f"❌ Error getting published analyses: {str(e)}")
-        traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-@app.route('/publish/<int:publish_id>', methods=['GET'])
-def get_published_analysis(publish_id):
-    """Get a specific published analysis by ID"""
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            c = conn.cursor()
-            
-            c.execute('''
-                SELECT 
-                    id,
-                    symbol,
-                    name,
-                    price,
-                    price_change,
-                    target_price,
-                    sentiment,
-                    sentiment_score,
-                    market,
-                    prediction_direction,
-                    prediction_reasoning,
-                    timeline,
-                    confidence,
-                    status,
-                    datetime(published_at) as published_at
-                FROM published_analyses 
-                WHERE id = ?
-            ''', (publish_id,))
-            
-            row = c.fetchone()
-            
-            if not row:
-                return jsonify({
-                    "status": "error",
-                    "message": f"Published analysis with ID {publish_id} not found"
-                }), 404
-            
-            result = dict(row)
-            
-            # Format the result to match the expected structure
-            formatted_result = {
-                "id": result['id'],
-                "symbol": result['symbol'],
-                "name": result['name'],
-                "price": result['price'],
-                "priceChange": result['price_change'],
-                "targetPrice": result['target_price'],
-                "sentiment": result['sentiment'],
-                "sentimentScore": result['sentiment_score'],
-                "market": result['market'],
-                "prediction": {
-                    "direction": result['prediction_direction'],
-                    "reasoning": json.loads(result['prediction_reasoning'])
-                },
-                "timeline": result['timeline'],
-                "confidence": result['confidence'],
-                "status": result['status'],
-                "timestamp": result['published_at']
-            }
-            
-            return jsonify({
-                "status": "success",
-                "data": formatted_result
-            })
-            
-    except Exception as e:
-        print(f"❌ Error getting published analysis: {str(e)}")
-        traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
 
 @app.route('/api/v1/market-analysis/<date>')
 def get_daily_market_analysis(date):
@@ -7628,6 +7412,296 @@ def get_coin_trends_by_date(date):
             
     except Exception as e:
         print(f"Error in get_coin_trends_by_date: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@app.route('/publish', methods=['POST'])
+def publish_analysis():
+    """Publish analysis result"""
+    try:
+        data = request.get_json()
+        
+        # Validate category
+        category = data.get('category', '').lower()
+        if category not in ['large cap', 'low cap']:
+            return jsonify({
+                "status": "error",
+                "message": "Category must be either 'large cap' or 'low cap'"
+            }), 400
+        
+        # Create or update published_analyses table
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Create table if not exists
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS published_analyses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT,
+                    name TEXT,
+                    price TEXT,
+                    price_change REAL,
+                    target_price TEXT,
+                    sentiment TEXT,
+                    sentiment_score INTEGER,
+                    market TEXT,
+                    prediction_direction TEXT,
+                    prediction_reasoning TEXT,
+                    timeline TEXT,
+                    confidence INTEGER,
+                    status TEXT,
+                    published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Check if category column exists, if not add it
+            try:
+                c.execute("SELECT category FROM published_analyses LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding category column to published_analyses table")
+                c.execute("ALTER TABLE published_analyses ADD COLUMN category TEXT")
+            
+            # Insert new published analysis
+            c.execute('''
+                INSERT INTO published_analyses 
+                (symbol, name, price, price_change, target_price, sentiment, 
+                 sentiment_score, market, prediction_direction, prediction_reasoning, 
+                 timeline, confidence, status, category)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data.get('symbol'),
+                data.get('name'),
+                data.get('price'),
+                data.get('priceChange'),
+                data.get('targetPrice'),
+                data.get('sentiment'),
+                data.get('sentimentScore'),
+                data.get('market'),
+                data.get('prediction', {}).get('direction'),
+                json.dumps(data.get('prediction', {}).get('reasoning', [])),
+                data.get('timeline'),
+                data.get('confidence'),
+                data.get('status'),
+                category
+            ))
+            
+            publish_id = c.lastrowid
+            
+            print(f"✅ Published analysis with ID: {publish_id}")
+            
+            return jsonify({
+                "status": "success",
+                "message": "Analysis published successfully",
+                "data": {
+                    "publish_id": publish_id
+                }
+            })
+            
+    except Exception as e:
+        print(f"❌ Error publishing analysis: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/publish', methods=['GET'])
+def get_published_analyses():
+    """Get all published analyses"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Check if category column exists, if not add it
+            try:
+                c.execute("SELECT category FROM published_analyses LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding category column to published_analyses table")
+                c.execute("ALTER TABLE published_analyses ADD COLUMN category TEXT")
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    symbol,
+                    name,
+                    price,
+                    price_change,
+                    target_price,
+                    sentiment,
+                    sentiment_score,
+                    market,
+                    prediction_direction,
+                    prediction_reasoning,
+                    timeline,
+                    confidence,
+                    status,
+                    category,
+                    datetime(published_at) as published_at
+                FROM published_analyses 
+                ORDER BY published_at DESC
+            ''')
+            
+            results = []
+            for row in c.fetchall():
+                result = dict(row)
+                
+                # Format the result to match the expected structure
+                formatted_result = {
+                    "id": result['id'],
+                    "symbol": result['symbol'],
+                    "name": result['name'],
+                    "price": result['price'],
+                    "priceChange": result['price_change'],
+                    "targetPrice": result['target_price'],
+                    "sentiment": result['sentiment'],
+                    "sentimentScore": result['sentiment_score'],
+                    "market": result['market'],
+                    "prediction": {
+                        "direction": result['prediction_direction'],
+                        "reasoning": json.loads(result['prediction_reasoning'])
+                    },
+                    "timeline": result['timeline'],
+                    "confidence": result['confidence'],
+                    "status": result['status'],
+                    "category": result['category'] or "large cap",  # Default to large cap if null
+                    "timestamp": result['published_at']
+                }
+                
+                results.append(formatted_result)
+            
+            return jsonify({
+                "status": "success",
+                "data": results
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting published analyses: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/publish/<int:publish_id>', methods=['GET'])
+def get_published_analysis(publish_id):
+    """Get a specific published analysis by ID"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Check if category column exists, if not add it
+            try:
+                c.execute("SELECT category FROM published_analyses LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding category column to published_analyses table")
+                c.execute("ALTER TABLE published_analyses ADD COLUMN category TEXT")
+            
+            c.execute('''
+                SELECT 
+                    id,
+                    symbol,
+                    name,
+                    price,
+                    price_change,
+                    target_price,
+                    sentiment,
+                    sentiment_score,
+                    market,
+                    prediction_direction,
+                    prediction_reasoning,
+                    timeline,
+                    confidence,
+                    status,
+                    category,
+                    datetime(published_at) as published_at
+                FROM published_analyses 
+                WHERE id = ?
+            ''', (publish_id,))
+            
+            row = c.fetchone()
+            
+            if not row:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Published analysis with ID {publish_id} not found"
+                }), 404
+            
+            result = dict(row)
+            
+            # Format the result to match the expected structure
+            formatted_result = {
+                "id": result['id'],
+                "symbol": result['symbol'],
+                "name": result['name'],
+                "price": result['price'],
+                "priceChange": result['price_change'],
+                "targetPrice": result['target_price'],
+                "sentiment": result['sentiment'],
+                "sentimentScore": result['sentiment_score'],
+                "market": result['market'],
+                "prediction": {
+                    "direction": result['prediction_direction'],
+                    "reasoning": json.loads(result['prediction_reasoning'])
+                },
+                "timeline": result['timeline'],
+                "confidence": result['confidence'],
+                "status": result['status'],
+                "category": result['category'] or "large cap",  # Default to large cap if null
+                "timestamp": result['published_at']
+            }
+            
+            return jsonify({
+                "status": "success",
+                "data": formatted_result
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting published analysis: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+@app.route('/publish/<int:publish_id>', methods=['DELETE'])
+def delete_published_analysis(publish_id):
+    """Delete a specific published analysis by ID"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # First check if the analysis exists
+            c.execute('SELECT id FROM published_analyses WHERE id = ?', (publish_id,))
+            if not c.fetchone():
+                return jsonify({
+                    "status": "error",
+                    "message": f"Published analysis with ID {publish_id} not found"
+                }), 404
+            
+            # Delete the analysis
+            c.execute('DELETE FROM published_analyses WHERE id = ?', (publish_id,))
+            
+            if c.rowcount > 0:
+                print(f"✅ Deleted published analysis with ID: {publish_id}")
+                return jsonify({
+                    "status": "success",
+                    "message": f"Published analysis with ID {publish_id} deleted successfully"
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Failed to delete published analysis with ID {publish_id}"
+                }), 500
+            
+    except Exception as e:
+        print(f"❌ Error deleting published analysis: {str(e)}")
+        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
