@@ -7708,6 +7708,75 @@ def delete_published_analysis(publish_id):
         }), 500
 
 
+@app.route('/api/v1/market-prediction', methods=['GET'])
+def get_market_predictions():
+    """Get simplified market predictions with specific fields only"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Check if category column exists, if not add it
+            try:
+                c.execute("SELECT category FROM published_analyses LIMIT 1")
+            except sqlite3.OperationalError:
+                print("Adding category column to published_analyses table")
+                c.execute("ALTER TABLE published_analyses ADD COLUMN category TEXT")
+            
+            c.execute('''
+                SELECT 
+                    symbol,
+                    target_price,
+                    sentiment,
+                    sentiment_score,
+                    market,
+                    prediction_direction,
+                    prediction_reasoning,
+                    timeline,
+                    confidence,
+                    status,
+                    category,
+                    datetime(published_at) as published_at
+                FROM published_analyses 
+                ORDER BY published_at DESC
+            ''')
+            
+            results = []
+            for row in c.fetchall():
+                result = dict(row)
+                
+                # Format the result with only the requested fields
+                formatted_result = {
+                    "symbol": result['symbol'],
+                    "targetPrice": result['target_price'],
+                    "sentiment": result['sentiment'],
+                    "sentimentScore": result['sentiment_score'],
+                    "market": result['market'],
+                    "prediction": {
+                        "direction": result['prediction_direction'],
+                        "reasoning": json.loads(result['prediction_reasoning'])
+                    },
+                    "timeline": result['timeline'],
+                    "confidence": result['confidence'],
+                    "status": result['status'],
+                    "category": result['category'] or "large cap",  # Default to large cap if null
+                    "timestamp": result['published_at']
+                }
+                
+                results.append(formatted_result)
+            
+            return jsonify({
+                "status": "success",
+                "data": results
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting market predictions: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 
 
