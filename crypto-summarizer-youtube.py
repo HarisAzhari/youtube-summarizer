@@ -6815,7 +6815,7 @@ REQUIRED OUTPUT FORMAT:
       "4. [Timeline insight]"
     ]
   }},
-  "timeline": "{timeline_format}",
+  "timeline": "{timeline_format} but strictly convert into this date format: DD-name of month-year",
   "confidence": [percentage],
   "status": "Complete"
 }}
