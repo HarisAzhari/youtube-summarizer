@@ -173,7 +173,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=51, second=0, microsecond=0)
+    next_run = now.replace(hour=7, minute=28, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -4068,8 +4068,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-02-26",
             "2025-02-27",
+            "2025-02-28",
         ]
         
         # Configure Gemini
@@ -6499,7 +6499,6 @@ def save_draft():
         with sqlite3.connect(DB_PATH) as conn:
             c = conn.cursor()
             
-            
             # Create table with correct schema
             c.execute('''
                 CREATE TABLE IF NOT EXISTS template_drafts (
@@ -6511,6 +6510,8 @@ def save_draft():
                     analysis_date TEXT,
                     gemini_model TEXT,
                     requirements TEXT,
+                    target_start TEXT,
+                    target_end TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -6520,8 +6521,8 @@ def save_draft():
             c.execute('''
                 INSERT INTO template_drafts 
                 (template_name, description, coin_symbol, historical_period, 
-                 analysis_date, gemini_model, requirements)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                 analysis_date, gemini_model, requirements, target_start, target_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 data.get('template_name'),
                 data.get('description'),
@@ -6529,7 +6530,9 @@ def save_draft():
                 data.get('historical_period'),
                 data.get('analysis_date'),
                 data.get('gemini_model'),
-                json.dumps(data.get('requirements', []))
+                json.dumps(data.get('requirements', [])),
+                data.get('target_start'),
+                data.get('target_end')
             ))
             
             draft_id = c.lastrowid
@@ -6567,6 +6570,8 @@ def get_drafts():
                     analysis_date,
                     gemini_model,
                     requirements,
+                    target_start,
+                    target_end,
                     datetime(created_at) as created_at,
                     datetime(updated_at) as updated_at
                 FROM template_drafts 
@@ -6591,51 +6596,6 @@ def get_drafts():
             "message": str(e)
         }), 500
 
-@app.route('/draft/<int:draft_id>', methods=['GET'])
-def get_draft(draft_id):
-    """Get specific draft by ID"""
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            c = conn.cursor()
-            
-            c.execute('''
-                SELECT 
-                    id,
-                    template_name,
-                    description,
-                    coin_symbol,
-                    historical_period,
-                    analysis_date,
-                    gemini_model,
-                    requirements,
-                    datetime(created_at) as created_at,
-                    datetime(updated_at) as updated_at
-                FROM template_drafts 
-                WHERE id = ?
-            ''', (draft_id,))
-            
-            result = c.fetchone()
-            
-            if result:
-                draft = dict(result)
-                draft['requirements'] = json.loads(draft['requirements'])
-                return jsonify({
-                    "status": "success",
-                    "data": draft
-                })
-            
-            return jsonify({
-                "status": "error",
-                "message": "Draft not found"
-            }), 404
-            
-    except Exception as e:
-        print(f"Error getting draft: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
 
 @app.route('/draft/<int:draft_id>', methods=['DELETE'])
 def delete_draft(draft_id):
@@ -6900,9 +6860,7 @@ def save_template():
         with sqlite3.connect(DB_PATH) as conn:
             c = conn.cursor()
             
-            # Drop existing table to reset schema
-            
-            # Create table with same structure as drafts
+            # Create table with updated structure
             c.execute('''
                 CREATE TABLE IF NOT EXISTS analysis_templates (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6913,17 +6871,19 @@ def save_template():
                     analysis_date TEXT,
                     gemini_model TEXT,
                     requirements TEXT,
+                    target_start TEXT,
+                    target_end TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Insert new template
+            # Insert new template with target dates
             c.execute('''
                 INSERT INTO analysis_templates 
                 (template_name, description, coin_symbol, historical_period, 
-                 analysis_date, gemini_model, requirements)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                 analysis_date, gemini_model, requirements, target_start, target_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 data.get('template_name'),
                 data.get('description'),
@@ -6931,7 +6891,9 @@ def save_template():
                 data.get('historical_period'),
                 data.get('analysis_date'),
                 data.get('gemini_model'),
-                json.dumps(data.get('requirements', []))
+                json.dumps(data.get('requirements', [])),
+                data.get('target_start'),
+                data.get('target_end')
             ))
             
             template_id = c.lastrowid
@@ -6969,6 +6931,8 @@ def get_templates():
                     analysis_date,
                     gemini_model,
                     requirements,
+                    target_start,
+                    target_end,
                     datetime(created_at) as created_at,
                     datetime(updated_at) as updated_at
                 FROM analysis_templates 
