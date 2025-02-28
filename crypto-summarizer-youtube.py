@@ -6760,7 +6760,7 @@ def run_draft():
                 "message": f"Price data error: {str(price_error)}"
             }), 500
 
-        # Configure Gemini with direct API key
+        # Configure Gemini
         try:
             print("\n🤖 Configuring Gemini model...")
             api_key = "AIzaSyBVaovh2Cz9LU7gUJ_ft00UBEv26_vaaC0"
@@ -6782,6 +6782,9 @@ def run_draft():
         try:
             print("\n📝 Building analysis prompt...")
             requirements_text = "\n".join([f"{i+1}. {req}" for i, req in enumerate(data['requirements'])])
+            
+            # Format timeline using target dates
+            timeline_format = f"[{data.get('target_start')} to {data.get('target_end')}]"
             
             prompt = f"""Analyze {data['coin_symbol']} market conditions and provide a detailed report matching the exact format below.
 
@@ -6812,7 +6815,7 @@ REQUIRED OUTPUT FORMAT:
       "4. [Timeline insight]"
     ]
   }},
-  "timeline": "[3-month window]",
+  "timeline": "{timeline_format}",
   "confidence": [percentage],
   "status": "Complete"
 }}
@@ -6823,7 +6826,7 @@ CRITICAL REQUIREMENTS:
 3. Prediction points must be specific and quantifiable
 4. Maintain exact UI format
 5. Target price must have technical and fundamental basis
-6. Timeline must consider known upcoming events
+6. Timeline must consider known upcoming events within the specified date range
 7. Confidence score must reflect data reliability
 8. All monetary values in USD
 
