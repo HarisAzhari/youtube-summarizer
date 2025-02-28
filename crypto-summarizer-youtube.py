@@ -7781,7 +7781,39 @@ def get_market_predictions():
             "message": str(e)
         }), 500
 
-
+@app.route('/publish/delete-all', methods=['DELETE'])
+def delete_all_published():
+    """Delete all published analyses"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            
+            # Get count of records before deletion
+            c.execute('SELECT COUNT(*) FROM published_analyses')
+            count_before = c.fetchone()[0]
+            
+            # Delete all records
+            c.execute('DELETE FROM published_analyses')
+            
+            # Get number of deleted records
+            deleted_count = c.rowcount
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Successfully deleted all {deleted_count} published analyses",
+                "data": {
+                    "deleted_count": deleted_count,
+                    "total_before": count_before
+                }
+            })
+            
+    except Exception as e:
+        print(f"❌ Error deleting all published analyses: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 
 
