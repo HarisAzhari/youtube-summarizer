@@ -1,0 +1,83 @@
+=================================================================
+                      🚀 API USAGE SUMMARY 🚀                    
+=================================================================
+📅 Date Range             : 2025-03-06 to 2025-03-07  
+🌍 Total API Calls        : 12,345  
+🔄 Successful Requests    : 12,291 (99.6%)  
+❌ Failed Requests        : 54 (0.4%)  
+🚀 Avg. Response Time     : 250ms  
+⚡️ Peak Traffic Hour      : 14:00 - 15:00 (1,345 requests)  
+🔒 Auth Failures          : 21  
+🌐 Unique IPs Accessing   : 987  
+📍 Top Country            : 🇺🇸 Malaysia (55%)  
+======================================================================================
+                📊 API USAGE BREAKDOWN PER ENDPOINT              
+======================================================================================
+| Endpoint               | Calls | Avg. Time | Errors | % of Total | Most Used By    |
+|------------------------|-------|-----------|--------|------------|-----------------|
+| /api/market-analysis   | 4,567 | 190ms     | 12     | 37.0%      | Chrome (45%)    |
+| /api/coin-trends       | 2,345 | 280ms     | 9      | 19.0%      | Firefox (30%)   |
+| /api/market-prediction | 1,123 | 350ms     | 18     | 9.1%       | Safari (15%)    |
+======================================================================================
+                📈 HOURLY API TRAFFIC (LAST 24H)                
+======================================================================================
+00:00 - 01:00 →  345 calls  
+01:00 - 02:00 →  289 calls  
+02:00 - 03:00 →  123 calls  
+...  
+14:00 - 15:00 →  1,345 calls (🔥 Peak Hour)  
+...  
+23:00 - 00:00 →  567 calls  
+======================================================================================
+              ❌ MOST COMMON ERRORS & ISSUES ❌                
+======================================================================================
+| Error Code | Occurrences | Affected Endpoints | Possible Cause       |
+|-----------|------------|--------------------|----------------------|
+| 401       |  21        | /api/payment       | Invalid API Key      |
+| 500       |  18        | /api/reports       | Server Error         |
+| 404       |   9        | Various            | Invalid Endpoint     |
+| 429       |   6        | /api/orders        | Rate Limit Exceeded  |
+======================================================================================
+                🔥 RESPONSE TIME ANALYSIS 🔥                 
+======================================================================================  
+⚡️ Fastest Endpoint   : ⁠ /api/user ⁠ (Avg. 190ms)  
+🐢 Slowest Endpoint   : ⁠ /api/dashboard ⁠ (Avg. 600ms)  
+⏳ 95th Percentile    : 510ms  
+🚀 99th Percentile    : 1,200ms  
+======================================================================================  
+                  📡 TOP USER-AGENTS 📡                        
+======================================================================================  
+🖥️  Chrome  : 45%  
+🦊 Firefox  : 30%  
+🍏 Safari   : 15%  
+🖼️  Edge     : 10%  
+======================================================================================  
+                🚨 SECURITY ALERTS & THREATS 🚨              
+======================================================================================  
+⚠️  *Unusual Activity Detected*  
+  - IP: *192.168.1.50* (⚠️  1,200+ API calls in 10 min)  
+  - IP: *198.51.100.99* (🚨 Repeated 401 Unauthorized)  
+  - IP: *10.0.0.200* (🚫 Attempting to access non-public APIs)  
+
+🛡 *Top 3 Blocked IPs* (Rate Limit Exceeded / Suspicious Behavior)  
+  - *203.0.113.77* (Blocked after 50+ failed auth attempts)  
+  - *192.168.5.5* (Abusing ⁠ /api/payment ⁠ endpoint)  
+  - *172.16.100.99* (Trying SQL injection patterns 🚨)  
+======================================================================================  
+                📊 SYSTEM HEALTH & PERFORMANCE 📊                    
+======================================================================================  
+✅ Database Connection      : OK  
+✅ API Response Rate        : 99.6% Success  
+⚠️ Average Server CPU Load : *85% (🔴 High Usage!)*  
+✅ Memory Usage            : 72%  
+✅ Disk Space Left         : 120GB  
+🔄 Active API Instances    : 3  
+🌐 API Gateway Status      : OK  
+======================================================================================  
+                🚀 API PERFORMANCE SCORE 🚀                    
+======================================================================================  
+📊 *Overall API Health Score*: 8.7/10  
+✅ Performance Good, but some high CPU usage detected.  
+✅ Error rate below threshold.  
+⚠️ *Action Recommended*: Investigate slow queries in ⁠ /api/market-analysis ⁠.  
+======================================================================================  
