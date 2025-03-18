@@ -172,7 +172,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=28, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3162,47 +3162,97 @@ def get_reasons_by_date(date):
             "message": str(e)
         }), 500
 
+def retry_with_delay(max_retries=3, delay_seconds=60):
+    """Decorator to retry a function with delay when resources are exhausted"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retries += 1
+                    error_str = str(e).lower()
+                    
+                    # Check if error is related to resource exhaustion
+                    if any(msg in error_str for msg in ['resource', 'rate limit', 'quota']):
+                        if retries < max_retries:
+                            print(f"\n⏳ Resource limit hit. Waiting {delay_seconds} seconds before retry {retries}/{max_retries}...")
+                            time.sleep(delay_seconds)
+                            continue
+                    raise e
+            return None
+        return wrapper
+    return decorator
+
 @app.route('/youtube/reason/summary')
 def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-03-06",
-            "2025-03-07",
+            "2025-03-17",
+            "2025-03-18",
         ]
         
+        print("\n=== Starting Daily Reason Summary Process ===")
+        print(f"Target dates: {dates}")
+        
         # Configure Gemini
-        genai.configure(api_key=os.getenv('GEMINI_API_KEY_4'))
-        model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+        api_key = os.getenv('GEMINI_API_KEY_4')
+        print(f"\nGemini API Key present: {bool(api_key)}")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name="gemini-2.0-flash")
         
         all_summaries = []
         
+        @retry_with_delay(max_retries=3, delay_seconds=60)
+        def process_with_gemini(prompt, coin_name):
+            """Process prompt with Gemini with retry logic"""
+            response = model.generate_content(prompt)
+            return response.text.strip()
+        
         for date in dates:
-            print(f"Processing {date}...")
+            print(f"\n=== Processing Date: {date} ===")
             
             with app.test_client() as client:
+                print(f"\nFetching data from /youtube/today-analysis/{date}")
                 response = client.get(f'/youtube/today-analysis/{date}')
+                print(f"Response status code: {response.status_code}")
+                
                 if response.status_code != 200:
-                    print(f"No data found for {date}")
+                    print(f"❌ No data found for {date}")
+                    print(f"Response data: {response.get_data(as_text=True)}")
                     continue
                     
                 raw_data = response.get_json()
+                print(f"\nRaw data keys: {raw_data.keys()}")
+                print(f"Data section keys: {raw_data.get('data', {}).keys()}")
+                
                 if not raw_data.get('data', {}).get('reasons'):
-                    print(f"No reasons found for {date}")
+                    print(f"❌ No reasons found for {date}")
+                    print(f"Raw data structure: {json.dumps(raw_data, indent=2)}")
                     continue
                 
+                print(f"\nFound {len(raw_data['data']['reasons'])} reason entries")
+                
+                # Group reasons by coin
                 coin_data = {}
                 for reason in raw_data['data']['reasons']:
                     coin_name = reason['coin']
                     if coin_name not in coin_data:
                         coin_data[coin_name] = []
                     coin_data[coin_name].append(reason['reason'])
+                
+                print(f"\nProcessed coins: {list(coin_data.keys())}")
+                print(f"Total unique coins: {len(coin_data)}")
 
                 with sqlite3.connect(DB_PATH) as conn:
                     c = conn.cursor()
                     
                     for coin_name, reasons in coin_data.items():
-                        print(f"Processing {coin_name} for {date}...")
+                        print(f"\n--- Processing {coin_name} for {date} ---")
+                        print(f"Total reasons for {coin_name}: {len(reasons)}")
+                        print(f"Sample reasons: {reasons[:2]}")  # Show first 2 reasons
                         
                         prompt = f"""Analyze these reasons for {coin_name} and extract key points with sentiment.
                         
@@ -3233,12 +3283,18 @@ def summarize_daily_reasons():
                         """
 
                         try:
-                            response = model.generate_content(prompt)
-                            clean_response = response.text.strip()
+                            print(f"\nSending prompt to Gemini for {coin_name}")
                             
-                            # Print raw response for debugging
-                            print(f"Raw Gemini response for {coin_name}:")
+                            # Use retry logic for Gemini API calls
+                            clean_response = process_with_gemini(prompt, coin_name)
+                            if not clean_response:
+                                print(f"❌ Failed to get response from Gemini for {coin_name} after retries")
+                                continue
+                            
+                            print(f"\nRaw Gemini response for {coin_name}:")
+                            print("=" * 50)
                             print(clean_response)
+                            print("=" * 50)
                             
                             if clean_response.startswith('```json'):
                                 clean_response = clean_response[7:]
@@ -3247,14 +3303,34 @@ def summarize_daily_reasons():
                             if clean_response.endswith('```'):
                                 clean_response = clean_response[:-3]
 
-                            analysis = json.loads(clean_response.strip())
+                            print("\nCleaned response:")
+                            print(clean_response)
                             
-                            # Store in database
-                            c.execute('''
-                                INSERT OR REPLACE INTO reason_summaries 
-                                (analysis_date, coin_name, summary, created_at)
-                                VALUES (?, ?, ?, datetime('now'))
-                            ''', (date, coin_name, clean_response.strip()))
+                            try:
+                                analysis = json.loads(clean_response.strip())
+                                print(f"\nParsed JSON successfully for {coin_name}")
+                                print(f"Number of key points: {len(analysis.get('key_points', []))}")
+                            except json.JSONDecodeError as json_err:
+                                print(f"❌ JSON parsing error for {coin_name}: {str(json_err)}")
+                                print("Problem section:")
+                                print(clean_response.strip())
+                                continue
+                            
+                            # Store in database with retry
+                            @retry_with_delay(max_retries=3, delay_seconds=30)
+                            def store_in_db():
+                                c.execute('''
+                                    INSERT OR REPLACE INTO reason_summaries 
+                                    (analysis_date, coin_name, summary, created_at)
+                                    VALUES (?, ?, ?, datetime('now'))
+                                ''', (date, coin_name, clean_response.strip()))
+                            
+                            try:
+                                store_in_db()
+                                print(f"\n✅ Successfully stored {coin_name} in database")
+                            except sqlite3.Error as db_err:
+                                print(f"❌ Database error for {coin_name}: {str(db_err)}")
+                                continue
                             
                             all_summaries.append({
                                 "coin_name": coin_name,
@@ -3262,31 +3338,192 @@ def summarize_daily_reasons():
                                 "key_points": analysis.get('key_points', [])
                             })
                             
-                            print(f"Successfully processed {coin_name} for {date}")
+                            print(f"✅ Successfully processed {coin_name} for {date}")
                             
                         except Exception as e:
-                            print(f"Error processing {coin_name} for {date}: {str(e)}")
-                            print(f"Clean response that failed: {clean_response}")
+                            print(f"❌ Error processing {coin_name} for {date}: {str(e)}")
+                            print(f"Error type: {type(e).__name__}")
+                            print("Full traceback:")
+                            traceback.print_exc()
                             continue
                     
                     conn.commit()
-                    print(f"Completed storing summaries for {date}")
+                    print(f"\n✅ Completed storing summaries for {date}")
+                    print(f"Total summaries stored: {len(all_summaries)}")
 
+        print("\n=== Process Complete ===")
+        print(f"Total summaries generated: {len(all_summaries)}")
+        
         return jsonify({
             "status": "success",
             "data": {
-                "date": dates[0],  # Using first date
-                "summaries": all_summaries
+                "date": dates[0],
+                "summaries": all_summaries,
+                "debug_info": {
+                    "total_processed": len(all_summaries),
+                    "dates_processed": dates,
+                    "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
             }
         })
 
     except Exception as e:
-        print(f"Error in summarize_daily_reasons: {str(e)}")
+        print("\n❌ CRITICAL ERROR in summarize_daily_reasons:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print("\nFull traceback:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }), 500
+    
+@app.route('/youtube/reason/search')
+def search_coin_reasons():
+    """Search for coin reasons by coin name and date with flexible matching"""
+    try:
+        # Get search parameters
+        coin = request.args.get('coin')
+        date = request.args.get('date')
+        
+        if not coin and not date:
+            return jsonify({
+                "status": "error",
+                "message": "Please provide either 'coin' or 'date' parameter"
+            }), 400
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get coin name overrides first
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Build the query based on provided parameters
+            query = '''
+                SELECT 
+                    analysis_date,
+                    coin_name,
+                    summary,
+                    created_at
+                FROM reason_summaries
+                WHERE 1=1
+            '''
+            params = []
+            
+            if coin:
+                # Case-insensitive search with partial matching
+                query += ''' 
+                    AND (
+                        LOWER(coin_name) LIKE LOWER(?)
+                        OR LOWER(coin_name) LIKE LOWER(?)
+                    )
+                '''
+                params.extend([f'%{coin}%', f'%{name_mapping.get(coin, coin)}%'])
+            
+            if date:
+                query += ' AND analysis_date = ?'
+                params.append(date)
+            
+            query += ' ORDER BY analysis_date DESC, coin_name'
+            
+            c.execute(query, params)
+            rows = c.fetchall()
+            
+            if not rows:
+                return jsonify({
+                    "status": "success",
+                    "message": "No matching records found",
+                    "data": {
+                        "search_params": {
+                            "coin": coin,
+                            "date": date
+                        },
+                        "results": []
+                    }
+                })
+            
+            # Process results
+            results = []
+            for row in rows:
+                try:
+                    summary_data = json.loads(row['summary'])
+                    
+                    # Apply name override if exists
+                    coin_name = row['coin_name']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                    
+                    results.append({
+                        "date": row['analysis_date'],
+                        "coin": coin_name,
+                        "key_points": summary_data.get('key_points', []),
+                        "created_at": row['created_at'],
+                        "sentiment_summary": {
+                            "bullish": len([p for p in summary_data.get('key_points', []) 
+                                          if p.get('sentiment') == 'BULLISH']),
+                            "bearish": len([p for p in summary_data.get('key_points', []) 
+                                          if p.get('sentiment') == 'BEARISH']),
+                            "neutral": len([p for p in summary_data.get('key_points', []) 
+                                          if p.get('sentiment') == 'NEUTRAL'])
+                        }
+                    })
+                except json.JSONDecodeError:
+                    print(f"Error parsing summary for {row['coin_name']} on {row['analysis_date']}")
+                    continue
+            
+            # Add summary statistics
+            total_points = sum(len(r['key_points']) for r in results)
+            total_bullish = sum(r['sentiment_summary']['bullish'] for r in results)
+            total_bearish = sum(r['sentiment_summary']['bearish'] for r in results)
+            total_neutral = sum(r['sentiment_summary']['neutral'] for r in results)
+            
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "search_params": {
+                        "coin": coin,
+                        "date": date
+                    },
+                    "summary": {
+                        "total_records": len(results),
+                        "unique_coins": len(set(r['coin'] for r in results)),
+                        "date_range": {
+                            "earliest": min(r['date'] for r in results),
+                            "latest": max(r['date'] for r in results)
+                        },
+                        "total_points": total_points,
+                        "sentiment_distribution": {
+                            "bullish": total_bullish,
+                            "bearish": total_bearish,
+                            "neutral": total_neutral,
+                            "overall_sentiment": "BULLISH" if total_bullish > total_bearish else 
+                                               "BEARISH" if total_bearish > total_bullish else 
+                                               "NEUTRAL"
+                        }
+                    },
+                    "results": results
+                }
+            })
+
+    except Exception as e:
+        print(f"Error in search_coin_reasons: {str(e)}")
         traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
         }), 500
+    
+
 
 @app.route('/youtube/reason-summaries/all/<coin>')
 def get_all_reason_summaries(coin=None):
@@ -4289,7 +4526,7 @@ def respond():
         # Structured prompt for Fiqh questions
         system_prompt = """
         You are a Fiqh guidance system. When users ask about Zakat or other Fiqh topics:
-        1. Instead of giving direct answers, provide 12 clarifying questions
+        1. Instead of giving direct answers, provide 4 clarifying questions
         2. Focus on understanding which specific aspect they need help with
         3. Questions should cover different aspects like:
            - Practical implementation
@@ -4304,7 +4541,7 @@ def respond():
         2. Are you asking about which types of wealth are subject to Zakat?
         3. Are you asking about when Zakat becomes obligatory?
 
-        Provide 12 clarifying questions
+        Provide 4 clarifying questions
 
         Provide respond according to the language of the user if its english or urdu or arabic or malay. The question is not only about zakat but also about other fiqh topics.
 
@@ -5700,6 +5937,46 @@ def delete_all_published():
             
     except Exception as e:
         print(f"❌ Error dropping published analyses table: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+    
+@app.route('/publish/<int:publish_id>/status', methods=['PUT'])
+def update_publish_status(publish_id):
+    """Update the status of a published analysis"""
+    try:
+        data = request.get_json()
+        new_status = data.get('status')
+        
+        if not new_status:
+            return jsonify({
+                "status": "error",
+                "message": "Status is required"
+            }), 400
+
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute('''
+                UPDATE published_analyses 
+                SET status = ? 
+                WHERE id = ?
+            ''', (new_status, publish_id))
+            
+            if c.rowcount == 0:
+                return jsonify({
+                    "status": "error",
+                    "message": "Published analysis not found"
+                }), 404
+
+            return jsonify({
+                "status": "success",
+                "message": "Status updated successfully"
+            })
+
+    except Exception as e:
+        print(f"❌ Error updating publish status: {str(e)}")
         traceback.print_exc()
         return jsonify({
             "status": "error",
