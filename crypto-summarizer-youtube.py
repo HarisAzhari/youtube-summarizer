@@ -45,7 +45,9 @@ CORS(app, resources={
             "https://moometrics.io",        # Main domain
             "http://localhost:*",           # Local development (any port)
             "http://localhost:5176",
-            "https://www.aifiqh.com"        # Specific local development port
+            "https://www.aifiqh.com",
+            "https://admin.aifiqh.com",
+            "https://admin.moometrics.io/prediciton "
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
@@ -172,7 +174,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=12, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3190,8 +3192,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-03-17",
             "2025-03-18",
+            "2025-03-19",
         ]
         
         print("\n=== Starting Daily Reason Summary Process ===")
