@@ -174,7 +174,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=12, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=19, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3192,8 +3192,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-03-18",
             "2025-03-19",
+            "2025-03-20",
         ]
         
         print("\n=== Starting Daily Reason Summary Process ===")
@@ -5985,7 +5985,235 @@ def update_publish_status(publish_id):
             "message": str(e)
         }), 500
     
+@app.route('/youtube/reason/summary/q1/<symbol>')
+def get_coin_q1_summary(symbol):
+    """Retrieve all stored summaries for a specific coin during Q1 2025"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Query for Q1 2025 (January 1st to March 31st)
+            c.execute('''
+                SELECT analysis_date, coin_name, summary, created_at
+                FROM reason_summaries
+                WHERE coin_name = ?
+                AND analysis_date >= '2025-01-01' 
+                AND analysis_date <= '2025-03-31'
+                ORDER BY analysis_date
+            ''', (symbol.upper(),))
+            
+            rows = c.fetchall()
+            
+            if rows:
+                summaries = []
+                for row in rows:
+                    summary_data = {
+                        "date": row['analysis_date'],
+                        "key_points": json.loads(row['summary'])['key_points'],
+                        "created_at": row['created_at']
+                    }
+                    summaries.append(summary_data)
+                
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "coin": symbol.upper(),
+                        "period": "Q1 2025",
+                        "total_days_with_mentions": len(summaries),
+                        "summaries": summaries
+                    }
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": f"No summaries found for {symbol.upper()} in Q1 2025"
+                }), 404
+                
+    except Exception as e:
+        print(f"Error retrieving Q1 summaries: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
+@app.route('/youtube/process-news/<symbol>')
+def process_coin_news(symbol):
+    """Process Q1 2025 data for a specific coin and generate comprehensive insights in Messari-style format"""
+    try:
+        print(f"\nStarting comprehensive analysis for {symbol}")
+        
+        # Get all stored summaries for this coin in Q1 2025
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            print(f"\nFetching data for {symbol.upper()} from Q1 2025 (Jan 1 - Mar 31)...")
+            
+            # Query for Q1 2025 (January 1st to March 31st)
+            c.execute('''
+                SELECT analysis_date, coin_name, summary, created_at
+                FROM reason_summaries
+                WHERE coin_name = ?
+                AND analysis_date >= '2025-01-01' 
+                AND analysis_date <= '2025-03-31'
+                ORDER BY analysis_date
+            ''', (symbol.upper(),))
+            
+            rows = c.fetchall()
+            
+            if not rows:
+                print(f"No data found for {symbol.upper()} in Q1 2025")
+                return jsonify({
+                    "status": "error",
+                    "message": f"No data found for {symbol.upper()} in Q1 2025"
+                }), 404
+            
+            print(f"\nFound {len(rows)} days of data for {symbol.upper()}")
+            print(f"Date range: {rows[0]['analysis_date']} to {rows[-1]['analysis_date']}")
+            
+            # Prepare data for analysis
+            summaries = []
+            for row in rows:
+                summary_data = {
+                    "date": row['analysis_date'],
+                    "key_points": json.loads(row['summary'])['key_points'],
+                    "created_at": row['created_at']
+                }
+                summaries.append(summary_data)
+            
+            print(f"\nTotal key points collected: {sum(len(s['key_points']) for s in summaries)}")
+            print(f"Average key points per day: {sum(len(s['key_points']) for s in summaries) / len(summaries):.1f}")
+            
+            # Configure Gemini
+            api_key = os.getenv('GEMINI_API_KEY_1')
+            if not api_key:
+                print("Error: GEMINI_API_KEY_1 not found in environment variables")
+                return jsonify({
+                    "status": "error",
+                    "message": "GEMINI_API_KEY_1 not found in environment variables"
+                }), 500
+                
+            print("\nConfiguring Gemini model...")
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name="gemini-2.0-flash")
+            
+            prompt = f"""Analyze this Q1 2025 data for {symbol.upper()} and create a detailed market analysis article in the style of Messari.
+
+CRITICAL RULES:
+1. Write in professional financial journalism style (like Messari, Bloomberg, or CoinDesk)
+2. Focus on concrete data points and specific numbers
+3. Provide percentage-based insights where possible
+4. Structure the article with clear sections and transitions
+5. Include both technical and fundamental analysis
+6. Highlight key trends and patterns
+7. Maintain objectivity while providing clear insights
+8. Include specific dates and timeframes for all data points
+9. Write in a narrative, engaging style that flows naturally
+
+Required Article Structure:
+{{
+    "article": {{
+        "title": "Engaging, data-driven title that captures the main insight",
+        "subtitle": "Brief subtitle providing context",
+        "sections": [
+            {{
+                "title": "Executive Summary",
+                "content": "2-3 paragraphs providing key takeaways and overall market position"
+            }},
+            {{
+                "title": "Market Overview",
+                "content": "Detailed analysis of current market conditions with specific data points"
+            }},
+            {{
+                "title": "Key Developments",
+                "content": "Chronological analysis of major events and their market impact"
+            }},
+            {{
+                "title": "Technical Analysis",
+                "content": "In-depth technical analysis with specific levels and indicators"
+            }},
+            {{
+                "title": "On-Chain Metrics",
+                "content": "Analysis of relevant on-chain data and network activity"
+            }},
+            {{
+                "title": "Market Sentiment",
+                "content": "Analysis of market sentiment with specific data points and trends"
+            }},
+            {{
+                "title": "Risk Factors",
+                "content": "Comprehensive analysis of potential risks and their implications"
+            }},
+            {{
+                "title": "Future Outlook",
+                "content": "Forward-looking analysis with specific predictions and confidence levels"
+            }},
+            {{
+                "title": "Key Takeaways",
+                "content": "Bullet points summarizing the most important insights"
+            }}
+        ]
+    }}
+}}
+
+Analyze this data:
+{json.dumps(summaries, indent=2)}"""
+
+            print("\nSending to Gemini for analysis...")
+            response = model.generate_content(prompt)
+            
+            # Clean response
+            clean_response = response.text.strip()
+            if clean_response.startswith('```json'):
+                clean_response = clean_response[7:]
+            if clean_response.startswith('```'):
+                clean_response = clean_response[3:]
+            if clean_response.endswith('```'):
+                clean_response = clean_response[:-3]
+            
+            analysis = json.loads(clean_response.strip())
+            
+            # Store the analysis in database
+            try:
+                with sqlite3.connect(DB_PATH) as conn:
+                    c = conn.cursor()
+                    # Create table if it doesn't exist
+                    c.execute('''CREATE TABLE IF NOT EXISTS comprehensive_analysis
+                               (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                coin_name TEXT,
+                                analysis_data TEXT,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                    
+                    # Delete any existing analysis for this coin
+                    c.execute('DELETE FROM comprehensive_analysis WHERE coin_name = ?', 
+                            (symbol.upper(),))
+                    
+                    # Insert new analysis
+                    c.execute('''INSERT INTO comprehensive_analysis 
+                               (coin_name, analysis_data)
+                               VALUES (?, ?)''',
+                            (symbol.upper(), json.dumps(analysis)))
+                    conn.commit()
+                    print(f"\nStored comprehensive analysis for {symbol.upper()}")
+                    print(f"Article title: {analysis['article']['title']}")
+                    print(f"Number of sections: {len(analysis['article']['sections'])}")
+            except Exception as db_error:
+                print(f"Database error: {str(db_error)}")
+            
+            return jsonify({
+                "status": "success",
+                "data": analysis
+            })
+            
+    except Exception as e:
+        print(f"\nError in process_coin_news: {str(e)}")
+        print("\nFull error details:")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
     
 if __name__ == '__main__':
     init_db()
