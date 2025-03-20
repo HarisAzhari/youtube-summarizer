@@ -6086,7 +6086,7 @@ def process_coin_news(symbol):
             print(f"Average key points per day: {sum(len(s['key_points']) for s in summaries) / len(summaries):.1f}")
             
             # Configure Gemini
-            api_key = os.getenv('GEMINI_API_KEY_1')
+            api_key = "AIzaSyBdMrLHWWswcUjJABblf2E1n2s1TZqYu9w"
             if not api_key:
                 print("Error: GEMINI_API_KEY_1 not found in environment variables")
                 return jsonify({
