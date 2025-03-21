@@ -174,7 +174,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=19, second=0, microsecond=0)
+    next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3192,8 +3192,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-03-19",
             "2025-03-20",
+            "2025-03-21",
         ]
         
         print("\n=== Starting Daily Reason Summary Process ===")
@@ -6113,7 +6113,15 @@ CRITICAL RULES:
 
 Required Article Structure:
 {{
+    "overall_title": "Main title for the entire analysis (e.g., 'Q1 2025 Market Analysis: {symbol.upper()} Performance and Outlook')",
     "article": {{
+        "key_metrics": {{
+            "price": "Current price with 24h change",
+            "market_cap": "Current market cap",
+            "volume_24h": "24-hour trading volume",
+            "dominance": "Market dominance percentage",
+            "volatility": "Current volatility metrics"
+        }},
         "title": "Engaging, data-driven title that captures the main insight",
         "subtitle": "Brief subtitle providing context",
         "sections": [
@@ -6163,16 +6171,37 @@ Analyze this data:
             print("\nSending to Gemini for analysis...")
             response = model.generate_content(prompt)
             
-            # Clean response
+            # Clean response - handle various response formats
             clean_response = response.text.strip()
+            
+            # Remove any markdown code block markers
             if clean_response.startswith('```json'):
                 clean_response = clean_response[7:]
-            if clean_response.startswith('```'):
+            elif clean_response.startswith('```'):
                 clean_response = clean_response[3:]
+            
             if clean_response.endswith('```'):
                 clean_response = clean_response[:-3]
             
-            analysis = json.loads(clean_response.strip())
+            # Remove any leading/trailing whitespace and newlines
+            clean_response = clean_response.strip()
+            
+            try:
+                # Try to parse the JSON
+                analysis = json.loads(clean_response)
+                print(f"\nGenerated overall title: {analysis.get('overall_title', 'No title generated')}")
+            except json.JSONDecodeError as e:
+                print(f"\nError parsing JSON response: {str(e)}")
+                print("Raw response:", clean_response)
+                # Try to fix common JSON issues
+                clean_response = clean_response.replace('\n', ' ').replace('\r', '')
+                clean_response = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', clean_response)  # Remove control characters
+                try:
+                    analysis = json.loads(clean_response)
+                    print(f"\nGenerated overall title: {analysis.get('overall_title', 'No title generated')}")
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse cleaned JSON: {str(e)}")
+                    raise Exception("Failed to parse Gemini response as valid JSON")
             
             # Store the analysis in database
             try:
