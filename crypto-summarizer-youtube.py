@@ -6171,55 +6171,91 @@ Analyze this data:
             print("\nSending to Gemini for analysis...")
             response = model.generate_content(prompt)
             
+            print("\n=== Raw Response from Gemini ===")
+            print(response.text)
+            
             # Clean response - handle various response formats
             clean_response = response.text.strip()
+            print("\n=== After Initial Strip ===")
+            print(clean_response)
             
             # Remove any markdown code block markers
             if clean_response.startswith('```json'):
                 clean_response = clean_response[7:]
+                print("\n=== After Removing ```json ===")
+                print(clean_response)
             elif clean_response.startswith('```'):
                 clean_response = clean_response[3:]
+                print("\n=== After Removing ``` ===")
+                print(clean_response)
             
             if clean_response.endswith('```'):
                 clean_response = clean_response[:-3]
+                print("\n=== After Removing Ending ``` ===")
+                print(clean_response)
             
             # Remove any leading/trailing whitespace and newlines
             clean_response = clean_response.strip()
+            print("\n=== After Final Strip ===")
+            print(clean_response)
             
             try:
                 # Try to parse the JSON
+                print("\n=== Attempting First JSON Parse ===")
                 analysis = json.loads(clean_response)
                 print(f"\nGenerated overall title: {analysis.get('overall_title', 'No title generated')}")
             except json.JSONDecodeError as e:
-                print(f"\nError parsing JSON response: {str(e)}")
+                print(f"\n=== First JSON Parse Failed ===")
+                print(f"Error: {str(e)}")
+                print("Error location:", e.pos)
+                print("Error line:", e.lineno)
+                print("Error column:", e.colno)
                 print("Raw response:", clean_response)
                 
                 # Enhanced cleaning of the response
                 try:
+                    print("\n=== Starting Enhanced Cleaning ===")
+                    
                     # Remove control characters and normalize line endings
                     clean_response = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', clean_response)
+                    print("\nAfter removing control characters:")
+                    print(clean_response)
+                    
                     clean_response = clean_response.replace('\r\n', '\n').replace('\r', '\n')
+                    print("\nAfter normalizing line endings:")
+                    print(clean_response)
                     
                     # Fix common JSON formatting issues
-                    clean_response = re.sub(r'(\w+):', r'"\1":', clean_response)  # Add quotes to unquoted keys
-                    clean_response = re.sub(r',\s*}', '}', clean_response)  # Remove trailing commas
-                    clean_response = re.sub(r',\s*]', ']', clean_response)  # Remove trailing commas in arrays
+                    clean_response = re.sub(r'(\w+):', r'"\1":', clean_response)
+                    print("\nAfter fixing unquoted keys:")
+                    print(clean_response)
+                    
+                    clean_response = re.sub(r',\s*}', '}', clean_response)
+                    clean_response = re.sub(r',\s*]', ']', clean_response)
+                    print("\nAfter removing trailing commas:")
+                    print(clean_response)
                     
                     # Handle escaped quotes and special characters
                     clean_response = clean_response.replace('\\"', '"')
                     clean_response = clean_response.replace('\\n', ' ')
                     clean_response = clean_response.replace('\\t', ' ')
+                    print("\nAfter handling escaped characters:")
+                    print(clean_response)
                     
                     # Remove any double spaces
                     clean_response = re.sub(r'\s+', ' ', clean_response)
+                    print("\nAfter removing double spaces:")
+                    print(clean_response)
                     
-                    print("\nCleaned response:", clean_response)
-                    
-                    # Try parsing again
+                    print("\n=== Attempting Second JSON Parse ===")
                     analysis = json.loads(clean_response)
                     print(f"\nGenerated overall title: {analysis.get('overall_title', 'No title generated')}")
                 except json.JSONDecodeError as e:
-                    print(f"Failed to parse cleaned JSON: {str(e)}")
+                    print(f"\n=== Second JSON Parse Failed ===")
+                    print(f"Error: {str(e)}")
+                    print("Error location:", e.pos)
+                    print("Error line:", e.lineno)
+                    print("Error column:", e.colno)
                     print("Final cleaned response:", clean_response)
                     raise Exception("Failed to parse Gemini response as valid JSON")
             
