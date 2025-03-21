@@ -6193,14 +6193,34 @@ Analyze this data:
             except json.JSONDecodeError as e:
                 print(f"\nError parsing JSON response: {str(e)}")
                 print("Raw response:", clean_response)
-                # Try to fix common JSON issues
-                clean_response = clean_response.replace('\n', ' ').replace('\r', '')
-                clean_response = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', clean_response)  # Remove control characters
+                
+                # Enhanced cleaning of the response
                 try:
+                    # Remove control characters and normalize line endings
+                    clean_response = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', clean_response)
+                    clean_response = clean_response.replace('\r\n', '\n').replace('\r', '\n')
+                    
+                    # Fix common JSON formatting issues
+                    clean_response = re.sub(r'(\w+):', r'"\1":', clean_response)  # Add quotes to unquoted keys
+                    clean_response = re.sub(r',\s*}', '}', clean_response)  # Remove trailing commas
+                    clean_response = re.sub(r',\s*]', ']', clean_response)  # Remove trailing commas in arrays
+                    
+                    # Handle escaped quotes and special characters
+                    clean_response = clean_response.replace('\\"', '"')
+                    clean_response = clean_response.replace('\\n', ' ')
+                    clean_response = clean_response.replace('\\t', ' ')
+                    
+                    # Remove any double spaces
+                    clean_response = re.sub(r'\s+', ' ', clean_response)
+                    
+                    print("\nCleaned response:", clean_response)
+                    
+                    # Try parsing again
                     analysis = json.loads(clean_response)
                     print(f"\nGenerated overall title: {analysis.get('overall_title', 'No title generated')}")
                 except json.JSONDecodeError as e:
                     print(f"Failed to parse cleaned JSON: {str(e)}")
+                    print("Final cleaned response:", clean_response)
                     raise Exception("Failed to parse Gemini response as valid JSON")
             
             # Store the analysis in database
