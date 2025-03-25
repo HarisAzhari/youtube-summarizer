@@ -47,7 +47,8 @@ CORS(app, resources={
             "http://localhost:5176",
             "https://www.aifiqh.com",
             "https://admin.aifiqh.com",
-            "https://admin.moometrics.io/prediciton "
+            "https://admin.moometrics.io/prediciton ",
+            "https://admin.moometrics.io/graph"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
@@ -58,7 +59,7 @@ CORS(app, resources={
 
 # Configuration
 DB_PATH = 'youtube_crypto.db'
-API_KEY = 'AIzaSyCwVHt2_T0A3N39voVCCAieDgg0PctOSCs'
+API_KEY = 'AIzaSyBVaovh2Cz9LU7gUJ_ft00UBEv26_vaaC0'
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -174,7 +175,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    next_run = now.replace(hour=15, minute=21, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3192,8 +3193,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-03-20",
-            "2025-03-21",
+            "2025-03-24",
+            "2025-03-25",
         ]
         
         print("\n=== Starting Daily Reason Summary Process ===")
