@@ -59,7 +59,7 @@ CORS(app, resources={
 
 # Configuration
 DB_PATH = 'youtube_crypto.db'
-API_KEY = 'AIzaSyBVaovh2Cz9LU7gUJ_ft00UBEv26_vaaC0'
+API_KEY = 'AIzaSyBkSDI46SNDtJ5V0s3HxK6utmvYcHgLzrA'
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -175,7 +175,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=15, minute=21, second=0, microsecond=0)
+    next_run = now.replace(hour=7, minute=0, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3193,8 +3193,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-03-24",
-            "2025-03-25",
+            "2025-03-26",
+            "2025-03-27",
         ]
         
         print("\n=== Starting Daily Reason Summary Process ===")
@@ -6300,6 +6300,70 @@ Analyze this data:
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/youtube/mentions/all-dates')
+def get_all_dates_coin_mentions():
+    """Get list of all dates with their coin mention counts"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            
+            # Get all coin name overrides
+            c.execute('''
+                SELECT 
+                    current_name,
+                    new_name
+                FROM coin_edits
+                ORDER BY edited_at DESC
+            ''')
+            name_mapping = {row['current_name']: row['new_name'] for row in c.fetchall()}
+            
+            # Get all mentions with dates
+            c.execute('''
+                SELECT v.published_at, ca.coin_mentioned
+                FROM videos v
+                LEFT JOIN coin_analysis ca ON v.video_id = ca.video_id
+                WHERE ca.coin_mentioned IS NOT NULL
+            ''')
+            
+            # Process results in Python
+            malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+            date_counts = {}  # Dictionary to store date -> unique coins mapping
+            
+            for row in c.fetchall():
+                try:
+                    # Parse ISO format timestamp
+                    published_at = datetime.fromisoformat(row['published_at'].replace('Z', '+00:00'))
+                    published_at = pytz.utc.localize(published_at) if published_at.tzinfo is None else published_at
+                    published_my = published_at.astimezone(malaysia_tz)
+                    
+                    # Get date in YYYY-MM-DD format
+                    date_str = published_my.strftime('%Y-%m-%d')
+                    
+                    # Initialize set for this date if not exists
+                    if date_str not in date_counts:
+                        date_counts[date_str] = set()
+                    
+                    # Add coin to set (with name mapping if applicable)
+                    coin_name = row['coin_mentioned']
+                    if coin_name in name_mapping:
+                        coin_name = name_mapping[coin_name]
+                    date_counts[date_str].add(coin_name)
+                    
+                except Exception as e:
+                    print(f"Error processing row: {str(e)}")
+                    continue
+            
+            # Convert sets to counts and sort by date
+            result = {date: len(coins) for date, coins in date_counts.items()}
+            sorted_result = dict(sorted(result.items()))
+            
+            return jsonify(sorted_result)
+            
+    except Exception as e:
+        print(f"Error getting coin mentions by date: {str(e)}")
+        return jsonify({})
     
 if __name__ == '__main__':
     init_db()
