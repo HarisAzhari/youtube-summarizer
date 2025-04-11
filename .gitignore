@@ -1,10 +1,50 @@
-*.db
+# Python virtual environment
 .venv/
+venv/
+env/
+ENV/
 
-get-pip.py
+# Python bytecode files
+__pycache__/
+*.py[cod]
+*$py.class
 
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+eggs/
+*.egg
+
+# Local development settings
 .env
+.env.local
+*.log
+*.db
+*.sqlite3
 
-validated_content/
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
 
-test.py/
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Mac OS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo

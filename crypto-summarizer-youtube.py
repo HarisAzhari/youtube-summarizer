@@ -36,6 +36,50 @@ from historical_price import HistoricalPriceService
 from dataclasses import dataclass
 import re
 
+# Add the new imports at the top with other imports
+from google_search import (
+    # Original functions
+    search_feature_releases,
+    search_whitepaper_updates,
+    search_testnet_mainnet_milestones,
+    search_platform_integration,
+    search_team_changes,
+    search_new_partnerships,
+    search_onchain_activity,
+    search_active_addresses_growth,
+    search_real_world_adoption,
+    search_developer_activity,
+    search_community_sentiment,
+    search_liquidity_changes,
+    
+    # New functions
+    search_market_cap,
+    search_circulating_vs_total_supply,
+    search_tokenomics,
+    search_inflation_emission_rate,
+    search_token_utility,
+    search_network_activity_usage,
+    search_transaction_fees_revenue,
+    search_governance_decentralization,
+    search_exchange_listings,
+    search_regulatory_status,
+    search_security_audits,
+    search_competitor_analysis,
+    search_volatility_price_swings,
+    search_unusual_trading_patterns,
+    search_divergence_market_trends,
+    search_catalysts,
+    search_technical_signals,
+    search_comparative_strength_weakness,
+    search_trading_volume_anomalies,
+    search_exchange_inflows_outflows,
+    search_open_interest_futures,
+    
+    # Utility functions
+    analyze_cryptocurrency_full,
+    save_analysis_to_file
+)
+
 app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
@@ -49,6 +93,8 @@ CORS(app, resources={
             "https://admin.aifiqh.com",
             "https://admin.moometrics.io/prediciton ",
             "https://admin.moometrics.io/graph"
+            "https://admin.moometrics.io/news"
+            "https://admin.moometrics.io/news-scraper"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
@@ -59,7 +105,7 @@ CORS(app, resources={
 
 # Configuration
 DB_PATH = 'youtube_crypto.db'
-API_KEY = 'AIzaSyBkSDI46SNDtJ5V0s3HxK6utmvYcHgLzrA'
+API_KEY = 'AIzaSyBB1F_3gIWDmC-jZj5kIicdHVhCtZuK-dA'
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -175,7 +221,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=7, minute=0, second=0, microsecond=0)
+    next_run = now.replace(hour=11, minute=35, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3193,8 +3239,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-03-26",
-            "2025-03-27",
+            "2025-04-10",
+            "2025-04-11",
         ]
         
         print("\n=== Starting Daily Reason Summary Process ===")
@@ -6365,6 +6411,435 @@ def get_all_dates_coin_mentions():
         print(f"Error getting coin mentions by date: {str(e)}")
         return jsonify({})
     
-if __name__ == '__main__':
-    init_db()
-    app.run(port=8080, host='0.0.0.0')
+# New endpoints for detailed cryptocurrency analysis by category
+@app.route('/api/crypto/features/<symbol>')
+def get_crypto_features(symbol):
+    """Get feature releases information for a cryptocurrency"""
+    try:
+        result = search_feature_releases(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/whitepaper/<symbol>')
+def get_crypto_whitepaper(symbol):
+    """Get whitepaper updates information for a cryptocurrency"""
+    try:
+        result = search_whitepaper_updates(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/milestones/<symbol>')
+def get_crypto_milestones(symbol):
+    """Get testnet/mainnet milestones information for a cryptocurrency"""
+    try:
+        result = search_testnet_mainnet_milestones(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/integration/<symbol>')
+def get_crypto_integration(symbol):
+    """Get platform integration information for a cryptocurrency"""
+    try:
+        result = search_platform_integration(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/team/<symbol>')
+def get_crypto_team(symbol):
+    """Get team changes information for a cryptocurrency"""
+    try:
+        result = search_team_changes(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/partnerships/<symbol>')
+def get_crypto_partnerships(symbol):
+    """Get new partnerships information for a cryptocurrency"""
+    try:
+        result = search_new_partnerships(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/onchain/<symbol>')
+def get_crypto_onchain(symbol):
+    """Get on-chain activity information for a cryptocurrency"""
+    try:
+        result = search_onchain_activity(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/addresses/<symbol>')
+def get_crypto_addresses(symbol):
+    """Get active addresses growth information for a cryptocurrency"""
+    try:
+        result = search_active_addresses_growth(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/adoption/<symbol>')
+def get_crypto_adoption(symbol):
+    """Get real-world adoption information for a cryptocurrency"""
+    try:
+        result = search_real_world_adoption(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/development/<symbol>')
+def get_crypto_development(symbol):
+    """Get developer activity information for a cryptocurrency"""
+    try:
+        result = search_developer_activity(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/sentiment/<symbol>')
+def get_crypto_sentiment(symbol):
+    """Get community sentiment information for a cryptocurrency"""
+    try:
+        result = search_community_sentiment(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/liquidity/<symbol>')
+def get_crypto_liquidity(symbol):
+    """Get liquidity changes information for a cryptocurrency"""
+    try:
+        result = search_liquidity_changes(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/full/<symbol>')
+def get_crypto_analysis_full(symbol):
+    """Get full analysis for a cryptocurrency (all categories)"""
+    try:
+        results = analyze_cryptocurrency_full(symbol)
+        return jsonify({"success": True, "data": results}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/save/<symbol>', methods=['POST'])
+def save_crypto_analysis(symbol):
+    """Save analysis results to a file"""
+    try:
+        data = request.json
+        if not data or 'results' not in data:
+            return jsonify({"success": False, "error": "No results provided"}), 400
+        
+        filename = save_analysis_to_file(symbol, data['results'])
+        return jsonify({"success": True, "filename": filename}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Additional endpoints for the new cryptocurrency analysis categories
+@app.route('/api/crypto/marketcap/<symbol>')
+def get_crypto_marketcap(symbol):
+    """Get market cap information for a cryptocurrency"""
+    try:
+        result = search_market_cap(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/supply/<symbol>')
+def get_crypto_supply(symbol):
+    """Get circulating vs total supply information for a cryptocurrency"""
+    try:
+        result = search_circulating_vs_total_supply(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/tokenomics/<symbol>')
+def get_crypto_tokenomics(symbol):
+    """Get tokenomics information for a cryptocurrency"""
+    try:
+        result = search_tokenomics(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/emission/<symbol>')
+def get_crypto_emission(symbol):
+    """Get inflation/emission rate information for a cryptocurrency"""
+    try:
+        result = search_inflation_emission_rate(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/utility/<symbol>')
+def get_crypto_utility(symbol):
+    """Get token utility information for a cryptocurrency"""
+    try:
+        result = search_token_utility(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/usage/<symbol>')
+def get_crypto_usage(symbol):
+    """Get network activity & usage information for a cryptocurrency"""
+    try:
+        result = search_network_activity_usage(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/fees/<symbol>')
+def get_crypto_fees(symbol):
+    """Get transaction fees and revenue information for a cryptocurrency"""
+    try:
+        result = search_transaction_fees_revenue(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/governance/<symbol>')
+def get_crypto_governance(symbol):
+    """Get governance and decentralization information for a cryptocurrency"""
+    try:
+        result = search_governance_decentralization(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/exchanges/<symbol>')
+def get_crypto_exchanges(symbol):
+    """Get exchange listings information for a cryptocurrency"""
+    try:
+        result = search_exchange_listings(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/regulation/<symbol>')
+def get_crypto_regulation(symbol):
+    """Get regulatory status information for a cryptocurrency"""
+    try:
+        result = search_regulatory_status(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/security/<symbol>')
+def get_crypto_security(symbol):
+    """Get security audits information for a cryptocurrency"""
+    try:
+        result = search_security_audits(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/competitors/<symbol>')
+def get_crypto_competitors(symbol):
+    """Get competitor analysis information for a cryptocurrency"""
+    try:
+        result = search_competitor_analysis(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/volatility/<symbol>')
+def get_crypto_volatility(symbol):
+    """Get volatility spikes / price swings information for a cryptocurrency"""
+    try:
+        result = search_volatility_price_swings(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/unusual/<symbol>')
+def get_crypto_unusual(symbol):
+    """Get unusual trading patterns information for a cryptocurrency"""
+    try:
+        result = search_unusual_trading_patterns(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/divergence/<symbol>')
+def get_crypto_divergence(symbol):
+    """Get divergence from market trends information for a cryptocurrency"""
+    try:
+        result = search_divergence_market_trends(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/catalysts/<symbol>')
+def get_crypto_catalysts(symbol):
+    """Get catalysts (news/events) information for a cryptocurrency"""
+    try:
+        result = search_catalysts(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/technical/<symbol>')
+def get_crypto_technical(symbol):
+    """Get technical signals information for a cryptocurrency"""
+    try:
+        result = search_technical_signals(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/strength/<symbol>')
+def get_crypto_strength(symbol):
+    """Get comparative strength/weakness information for a cryptocurrency"""
+    try:
+        result = search_comparative_strength_weakness(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/volume/<symbol>')
+def get_crypto_volume(symbol):
+    """Get trading volume anomalies information for a cryptocurrency"""
+    try:
+        result = search_trading_volume_anomalies(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/flows/<symbol>')
+def get_crypto_flows(symbol):
+    """Get exchange inflows/outflows information for a cryptocurrency"""
+    try:
+        result = search_exchange_inflows_outflows(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/futures/<symbol>')
+def get_crypto_futures(symbol):
+    """Get open interest & futures activity information for a cryptocurrency"""
+    try:
+        result = search_open_interest_futures(symbol)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Additional utility endpoint for category-specific analysis
+@app.route('/api/crypto/category/<symbol>', methods=['POST'])
+def get_crypto_by_category(symbol):
+    """Get information for a specific category"""
+    try:
+        data = request.json
+        if not data or 'category' not in data:
+            return jsonify({"success": False, "error": "No category specified"}), 400
+        
+        category = data['category']
+        # Create a mapping of categories to their respective search functions
+        category_map = {
+            # Original categories
+            "Feature Releases or Updates": search_feature_releases,
+            "Whitepaper Updates": search_whitepaper_updates,
+            "Testnet or Mainnet Milestones": search_testnet_mainnet_milestones,
+            "Platform Integration": search_platform_integration,
+            "Team Changes": search_team_changes,
+            "New Partnerships": search_new_partnerships,
+            "On-chain Activity": search_onchain_activity,
+            "Active Addresses Growth": search_active_addresses_growth,
+            "Real World Adoption": search_real_world_adoption,
+            "Developer Activity": search_developer_activity,
+            "Community Sentiment": search_community_sentiment,
+            "Liquidity Changes": search_liquidity_changes,
+            
+            # New categories
+            "Market Cap": search_market_cap,
+            "Circulating Supply vs Total Supply": search_circulating_vs_total_supply,
+            "Tokenomics": search_tokenomics,
+            "Inflation/Emission Rate": search_inflation_emission_rate,
+            "Token Utility": search_token_utility,
+            "Network Activity & Usage": search_network_activity_usage,
+            "Transaction Fees and Revenue": search_transaction_fees_revenue,
+            "Governance and Decentralization": search_governance_decentralization,
+            "Exchange Listings": search_exchange_listings,
+            "Regulatory Status": search_regulatory_status,
+            "Security Audits": search_security_audits,
+            "Competitor Analysis": search_competitor_analysis,
+            "Volatility Spikes / Price Swings": search_volatility_price_swings,
+            "Unusual Trading Patterns": search_unusual_trading_patterns,
+            "Divergence from Market Trends": search_divergence_market_trends,
+            "Catalysts (News/Events)": search_catalysts,
+            "Technical Signals": search_technical_signals,
+            "Comparative Strength/Weakness": search_comparative_strength_weakness,
+            "Trading Volume Anomalies": search_trading_volume_anomalies,
+            "Exchange Inflows/Outflows": search_exchange_inflows_outflows,
+            "Open Interest & Futures Activity": search_open_interest_futures
+        }
+        
+        if category not in category_map:
+            return jsonify({"success": False, "error": f"Unknown category: {category}"}), 400
+        
+        # Call the appropriate search function
+        result = category_map[category](symbol)
+        return jsonify({"success": True, "data": result, "category": category}), 200
+    
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# Endpoint to get all available categories
+@app.route('/api/crypto/categories')
+def get_crypto_categories():
+    """Get all available cryptocurrency analysis categories"""
+    try:
+        categories = [
+            # Original categories
+            "Feature Releases or Updates",
+            "Whitepaper Updates",
+            "Testnet or Mainnet Milestones",
+            "Platform Integration",
+            "Team Changes",
+            "New Partnerships",
+            "On-chain Activity",
+            "Active Addresses Growth",
+            "Real World Adoption",
+            "Developer Activity",
+            "Community Sentiment",
+            "Liquidity Changes",
+            
+            # New categories
+            "Market Cap",
+            "Circulating Supply vs Total Supply",
+            "Tokenomics",
+            "Inflation/Emission Rate",
+            "Token Utility",
+            "Network Activity & Usage",
+            "Transaction Fees and Revenue",
+            "Governance and Decentralization",
+            "Exchange Listings",
+            "Regulatory Status",
+            "Security Audits",
+            "Competitor Analysis",
+            "Volatility Spikes / Price Swings",
+            "Unusual Trading Patterns",
+            "Divergence from Market Trends",
+            "Catalysts (News/Events)",
+            "Technical Signals",
+            "Comparative Strength/Weakness",
+            "Trading Volume Anomalies",
+            "Exchange Inflows/Outflows",
+            "Open Interest & Futures Activity"
+        ]
+        
+        return jsonify({"success": True, "categories": categories}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=8080, debug=True)
+    

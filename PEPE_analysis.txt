@@ -1,0 +1,50 @@
+=== CRYPTOCURRENCY ANALYSIS FOR PEPE ===
+
+=== Circulating Supply vs Total Supply ===
+Error retrieving information for Circulating Supply vs Total Supply: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:791030743251'.
+
+=== Tokenomics ===
+Error retrieving information for Tokenomics: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:550213135324'.
+
+=== Feature Releases or Updates ===
+Error retrieving information for Feature Releases or Updates: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:538446317884'.
+
+=== Liquidity Changes ===
+Error retrieving information for Liquidity Changes: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:88506903831'.
+
+=== Testnet or Mainnet Milestones ===
+Error retrieving information for Testnet or Mainnet Milestones: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:791030743251'.
+
+=== Team Changes ===
+Error retrieving information for Team Changes: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:1038060284295'.
+
+=== Platform Integration ===
+Error retrieving information for Platform Integration: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:765140345624'.
+
+=== Real World Adoption ===
+Error retrieving information for Real World Adoption: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:940554263710'.
+
+=== New Partnerships ===
+Error retrieving information for New Partnerships: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:126152973053'.
+
+=== Developer Activity ===
+Error retrieving information for Developer Activity: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:331693996046'.
+
+=== On-chain Activity ===
+Error retrieving information for On-chain Activity: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:1080009547273'.
+
+=== Whitepaper Updates ===
+Error retrieving information for Whitepaper Updates: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:550213135324'.
+
+=== Active Addresses Growth ===
+Error retrieving information for Active Addresses Growth: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:147340857131'.
+
+=== Community Sentiment ===
+Error retrieving information for Community Sentiment: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:1032791591140'.
+
+=== Inflation or Emission Rate ===
+Error retrieving information for Inflation or Emission Rate: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:765140345624'.
+
+=== Market Capitalization ===
+Error retrieving information for Market Capitalization: 429 RESOURCE_EXHAUSTED. Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region' of service 'generativelanguage.googleapis.com' for consumer 'project_number:538446317884'.
+
