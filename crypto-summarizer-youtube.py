@@ -221,7 +221,7 @@ def get_next_run_time():
     """Get next 6 AM MYT run time"""
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(malaysia_tz)
-    next_run = now.replace(hour=11, minute=35, second=0, microsecond=0)
+    next_run = now.replace(hour=10, minute=19, second=0, microsecond=0)
     
     # If it's already past 6 AM, schedule for next day
     if now >= next_run:
@@ -3239,8 +3239,8 @@ def summarize_daily_reasons():
     """Analyze and summarize coin reasons for Feb 13-17"""
     try:
         dates = [
-            "2025-04-10",
             "2025-04-11",
+            "2025-04-14",
         ]
         
         print("\n=== Starting Daily Reason Summary Process ===")

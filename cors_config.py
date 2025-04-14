@@ -1,19 +1,35 @@
-from flask_cors import CORS
+api_keys = [
+    "AIzaSyCtTHkJZ9jFkv_FYhZrND4gFz9dVUFPYJc",
+    "AIzaSyCrZL2L_tJaPdOkLDTIuEEIo_oOo0ALVLw",
+    "AIzaSyAXDKB2p4LQhIUAux6zL2geJJSosDcFj-4",
+    "AIzaSyDAQmkLFz_aJUNpURsynyCRBF6AhulUNL0",
+    "AIzaSyBhCbkVwSC5VdW39RuWMUjeFYhvJd0A0_g",
+    "AIzaSyA2wobm7_GMBwKUihRo0aeaFhiOWaaQkws",
+    "AIzaSyDg32MVSZUIglsqkgrvg6begbNMinZ46MY",
+    "AIzaSyBWQEe3vdeIPDArQJkxg8RrVGfnRRoXiNA",
+    "AIzaSyCjXLif_rGR83E8MFJlEeMatfGYz2rm4fY",
+    "AIzaSyBmTNlI2ZOafkOm_EVKXg_b8eg4Oyk6K6M",
+    "AIzaSyDGkMmkivjOD2LOyyFDs28QevOFQScZPbg",
+    "AIzaSyCKjjmJRnuDmuPsnjAHC_1cVyCVvhaWJ1w",
+    "AIzaSyA5CKdzPIyiTeLuyqBb9kpGPHAP-Aj51Go",
+    "AIzaSyAguN1ShmdPQOQdjTHtLGxqmiQIj_LWkAM",
+    "AIzaSyA5KJ9_Lv2vhn4fUtYNA25SiJXYe1OAjHI",
+    "AIzaSyBrRmjAD56HWjWE1SOAgnlCAGVcpjEOZzw",
+    "AIzaSyDH_0xetxubrd9m3RsEFyRyhp7EWKNr8jk",
+    "AIzaSyDSiig5hx3RZzH6X33GLXyNt3ZWaICZFkQ",
+    "AIzaSyB-WZnP9n4z3y27fOdS8hYq4oo9L-6APVY",
+    "AIzaSyATe06gRU11yjvFfVXN4uCg1Pgp7E7Sq8o",
+    "AIzaSyA8y_Zw13tqCn0KaasV5Q8S7QCVnw5vJxg",
+    "AIzaSyD0KtfV983lHEy4dpEa5Z_MbXUFRfjwdcc",
+    "AIzaSyB2mx0Y2v6Rm_qPhrtHwzjIiPP3C69n9Ck",
+    "AIzaSyCuqz_rx-e0uRt-ESkTKViNugvs7eL47OQ",
+    "AIzaSyDdace6S8SyMAxPzBM_2_PHQccHFtdFNtM",
+    "AIzaSyDqfkookwQs0jEX__E-6Gz_dudCows_Bp4",
+    "AIzaSyDjlW-3Ly-odygC4qAIgaEiZLZ8kybHhtg",
+    "AIzaSyBAJl9TECIF6FDgjwwq6zWtuW_9Bb28ths",
+    "AIzaSyBPINhRo4quLMOQ4Q-4I7I5hFM0YRmvEOc",
+    "AIzaSyCJtXIFqZulXC2T3ArKRjgD8JtPNKY0qfQ",
+    "AIzaSyDg8xYHu4JMpZNQifUp0p-xJyGOv3QUHzs",
+]
 
-def configure_cors(app):
-    """Configure CORS for the Flask application"""
-    
-    # Enable CORS for all routes
-    CORS(app, resources={
-        # Allow all routes
-        r"/*": {
-            # Allow requests from any origin
-            "origins": "*",
-            # Allow these methods
-            "methods": ["GET", "OPTIONS"],
-            # Allow these headers in requests
-            "allow_headers": ["Content-Type", "Authorization"]
-        }
-    })
-    
-    return app 
+print(len(api_keys))
